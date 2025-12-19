@@ -80,18 +80,18 @@ function IconNews({ active }: { active: boolean }) {
 type NavItem = {
   href: string;
   label: string;
-  icon: (active: boolean) => JSX.Element;
+  icon: (active: boolean) => React.ReactElement;
   showUnread?: boolean;
 };
 
-type UniLogo = {
+type LogoMark = {
   src: string;
   x: string;
   y: string;
   size: number;
   rot: number;
   opacity: number;
-  center?: boolean; // ✅ fix: optional
+  center?: boolean;
 };
 
 /* ---------- Pitch SVG (pure CSS/SVG) ---------- */
@@ -113,7 +113,7 @@ const pitchLinesSvg = encodeURIComponent(`
 `);
 
 function StadiumBackground() {
-  const logos: UniLogo[] = [
+  const logos: LogoMark[] = [
     { src: "/unis/guc.png", x: "10%", y: "16%", size: 220, rot: -12, opacity: 0.08 },
     { src: "/unis/bue.png", x: "78%", y: "18%", size: 220, rot: 10, opacity: 0.08 },
     { src: "/unis/auc.png", x: "14%", y: "74%", size: 240, rot: 8, opacity: 0.085 },
@@ -191,24 +191,28 @@ function StadiumBackground() {
       />
 
       {/* university logos watermark */}
-      {logos.map((l, idx) => (
-        <div
-          key={idx}
-          className="absolute"
-          style={{
-            left: l.x,
-            top: l.y,
-            transform: `translate(${l.center ? "-50%" : "0"}, ${l.center ? "-50%" : "0"}) rotate(${l.rot}deg)`,
-            width: l.size,
-            height: l.size,
-            opacity: l.opacity,
-            mixBlendMode: "screen",
-            filter: "blur(0.2px) drop-shadow(0 0 22px rgba(120,200,255,0.22))",
-          }}
-        >
-          <img src={l.src} alt="" className="w-full h-full object-contain" draggable={false} />
-        </div>
-      ))}
+      {logos.map((l, idx) => {
+        const tx = l.center ? "-50%" : "0";
+        const ty = l.center ? "-50%" : "0";
+        return (
+          <div
+            key={idx}
+            className="absolute"
+            style={{
+              left: l.x,
+              top: l.y,
+              transform: `translate(${tx}, ${ty}) rotate(${l.rot}deg)`,
+              width: l.size,
+              height: l.size,
+              opacity: l.opacity,
+              mixBlendMode: "screen",
+              filter: "blur(0.2px) drop-shadow(0 0 22px rgba(120,200,255,0.22))",
+            }}
+          >
+            <img src={l.src} alt="" className="w-full h-full object-contain" draggable={false} />
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -235,9 +239,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       setRole((prof?.role as Role) ?? null);
       setStatus(prof?.status ?? null);
 
-      if (prof?.role === "player" && prof?.status === "pending") {
-        router.replace("/waiting");
-      }
+      if (prof?.role === "player" && prof?.status === "pending") router.replace("/waiting");
     })();
   }, [router]);
 
@@ -332,7 +334,6 @@ function BottomNav({
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-50">
-      {/* nav glow */}
       <div
         className="pointer-events-none absolute inset-x-0 bottom-0 h-28"
         style={{
@@ -342,7 +343,6 @@ function BottomNav({
 
       <div className="max-w-4xl mx-auto px-4 pb-5">
         <div className="relative bg-[#0b1430]/75 backdrop-blur-xl border border-white/10 rounded-[24px] px-3 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.55)]">
-          {/* Animated sliding highlight */}
           <div
             className="absolute top-3 bottom-3 rounded-2xl border border-blue-400/25"
             style={{
