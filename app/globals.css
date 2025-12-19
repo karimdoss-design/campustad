@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+/* Keep the app dark by default */
+:root {
+  --background: #07102a;
+  --foreground: #ededed;
+}
+
+body {
+  background: transparent; /* ✅ let layout background show */
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* ✅ your existing input style */
+.input {
+  width: 100%;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(11, 21, 48, 0.75);
+  border: 1px solid #1f2a60;
+  color: white;
+}
+
+/* ✅ IMPORTANT:
+   Many pages use bg-[#0b1530] on the main wrapper.
+   This overrides and hides the stadium background.
+   So we force those wrappers to be transparent. */
+
+.bg-\[\#0b1530\] {
+  background-color: transparent !important;
+}
+
+/* Optional: also neutralize the other very common full-page solid bg */
+.bg-\[\#07102a\] {
+  background-color: transparent !important;
+}
+/* ---- Page transitions (View Transitions API) ---- */
+.vt-page {
+  view-transition-name: page;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(page),
+  ::view-transition-new(page) {
+    animation: none !important;
+  }
+}
+
+::view-transition-old(page) {
+  animation: vtFadeOut 180ms ease both;
+}
+::view-transition-new(page) {
+  animation: vtFadeIn 220ms ease both;
+}
+
+@keyframes vtFadeOut {
+  from { opacity: 1; transform: translateY(0px) scale(1); }
+  to   { opacity: 0; transform: translateY(6px) scale(0.99); }
+}
+@keyframes vtFadeIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.99); }
+  to   { opacity: 1; transform: translateY(0px) scale(1); }
+}
+.vt-page { view-transition-name: page; }
+
+::view-transition-old(page) { animation: vtFadeOut 160ms ease both; }
+::view-transition-new(page) { animation: vtFadeIn 220ms ease both; }
+
+@keyframes vtFadeOut { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(6px) scale(0.99); } }
+@keyframes vtFadeIn  { from { opacity: 0; transform: translateY(8px) scale(0.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
