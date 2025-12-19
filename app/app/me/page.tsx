@@ -143,8 +143,9 @@ export default function MyStatsPage() {
       return;
     }
 
-    if (tp?.teams) setTeam(tp.teams as Team);
-    else setTeam(null);
+const teamsArr = (tp?.teams as Team[] | null) ?? null;
+if (teamsArr && teamsArr.length > 0) setTeam(teamsArr[0]);
+else setTeam(null);
 
     setLoading(false);
   }
