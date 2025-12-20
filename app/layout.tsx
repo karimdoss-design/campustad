@@ -1,15 +1,20 @@
 import "./globals.css";
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 
 export const metadata: Metadata = {
   title: "Campustad",
   description: "Campustad Tournament",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className="dark">
-      <body className="bg-[#07102a] text-white">{children}</body>
+      {/* ✅ IMPORTANT: remove any solid background here, keep transparent */}
+      <body className="text-white bg-transparent min-h-screen">
+        {children}
+      </body>
     </html>
   );
 }
+

@@ -19,3 +19,33 @@ body {
   border: 1px solid #1f2a60;
   color: white;
 }
+/* Makes page wrappers transparent so the stadium background shows through */
+.page-shell {
+  background: transparent !important;
+}
+
+/* Optional: nice readable glass card */
+.glass-card {
+  background: rgba(17, 28, 68, 0.72);
+  border: 1px solid rgba(255,255,255,0.10);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: 16px;
+}
+/* 🔥 FORCE ALL PAGES TO BE TRANSPARENT (so stadium background shows) */
+html, body {
+  background: transparent !important;
+}
+
+/* Next.js root containers */
+body > div,
+#__next,
+main {
+  background: transparent !important;
+}
+
+/* Catch common full-screen wrappers */
+[class*="min-h-screen"],
+[class*="h-screen"] {
+  background-color: transparent !important;
+}
