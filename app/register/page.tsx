@@ -6,6 +6,11 @@ import { supabase } from "@/lib/supabaseClient";
 
 type Mode = "signup" | "signin";
 
+type ProfileRow = {
+  role: string;
+  status: string;
+};
+
 export default function RegisterPage() {
   const router = useRouter();
 
@@ -24,21 +29,40 @@ export default function RegisterPage() {
   const [university, setUniversity] = useState("");
   const [role, setRole] = useState<"player" | "fan">("fan");
 
+  // ✅ Debug info (TEMP)
+  const [debugOpen, setDebugOpen] = useState(true);
+  const [debugUserId, setDebugUserId] = useState<string>("");
+  const [debugProfile, setDebugProfile] = useState<any>(null);
+  const [debugProfileErr, setDebugProfileErr] = useState<any>(null);
+
   useEffect(() => {
     setErr("");
     setMsg("");
   }, [mode]);
 
   async function afterLoginRedirect(userId: string) {
+    // Always refetch from DB (source of truth)
     const { data: prof, error } = await supabase
       .from("profiles")
       .select("role,status")
       .eq("id", userId)
-      .single();
+      .maybeSingle();
 
-    // If profile not created yet, just go to app
-    if (error || !prof) {
-      router.replace("/app");
+    // ✅ DEBUG
+    setDebugUserId(userId);
+    setDebugProfile(prof ?? null);
+    setDebugProfileErr(error ?? null);
+
+    // If profile can't be read → show error (this is what’s happening to you)
+    if (error) {
+      setErr(
+        `Profile read blocked. This is almost always RLS or wrong Supabase project on Vercel.\n\nError: ${error.message}`
+      );
+      return;
+    }
+
+    if (!prof) {
+      setErr("No profile row found for this user id (profiles table).");
       return;
     }
 
@@ -99,15 +123,12 @@ export default function RegisterPage() {
       return;
     }
 
-    // IMPORTANT: proper redirect origin (works on localhost + Vercel)
-    const origin =
-      typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
-
     const { data, error } = await supabase.auth.signUp({
       email: cleanEmail,
       password,
       options: {
-        emailRedirectTo: `${origin}/app`,
+        // ✅ Don’t hardcode localhost in production. This is safe for now:
+        emailRedirectTo: `${window.location.origin}/app`,
       },
     });
 
@@ -123,9 +144,6 @@ export default function RegisterPage() {
       return;
     }
 
-    // Create profile row:
-    // - fan: active
-    // - player: pending (admin approves)
     const status = role === "player" ? "pending" : "active";
 
     const { error: profErr } = await supabase.from("profiles").insert({
@@ -145,17 +163,18 @@ export default function RegisterPage() {
     }
 
     setMsg("Signed up ✅");
-
     if (role === "player") router.replace("/waiting");
     else router.replace("/app");
   }
 
   return (
-    <div className="min-h-screen text-white p-6">
+    <div className="min-h-screen bg-transparent text-white p-6">
       <div className="max-w-md mx-auto space-y-4">
-        <div className="bg-[#111c44]/90 border border-white/10 rounded-2xl p-5 backdrop-blur">
+        <div className="bg-[#111c44]/80 border border-white/10 rounded-2xl p-5 backdrop-blur">
           <h1 className="text-2xl font-bold">Campustad</h1>
-          <p className="text-white/70">{mode === "signup" ? "Create account" : "Sign in to your account"}</p>
+          <p className="text-white/70">
+            {mode === "signup" ? "Create account" : "Sign in to your account"}
+          </p>
 
           <div className="mt-4 flex gap-2">
             <button
@@ -179,21 +198,60 @@ export default function RegisterPage() {
               Sign In
             </button>
           </div>
+
+          {/* ✅ DEBUG PANEL */}
+          <button
+            type="button"
+            onClick={() => setDebugOpen((v) => !v)}
+            className="mt-4 text-xs text-white/70 hover:text-white underline"
+          >
+            {debugOpen ? "Hide debug" : "Show debug"}
+          </button>
+
+          {debugOpen ? (
+            <div className="mt-3 text-xs bg-[#0b1530]/70 border border-white/10 rounded-xl p-3 space-y-2">
+              <div className="text-white/60">
+                NEXT_PUBLIC_SUPABASE_URL:{" "}
+                <span className="text-white break-all">
+                  {process.env.NEXT_PUBLIC_SUPABASE_URL || "(missing)"}
+                </span>
+              </div>
+              <div className="text-white/60">
+                Logged user id: <span className="text-white break-all">{debugUserId || "—"}</span>
+              </div>
+              <div className="text-white/60">
+                profiles row:{" "}
+                <pre className="text-white whitespace-pre-wrap break-words">
+                  {debugProfile ? JSON.stringify(debugProfile, null, 2) : "—"}
+                </pre>
+              </div>
+              <div className="text-white/60">
+                profiles error:{" "}
+                <pre className="text-red-200 whitespace-pre-wrap break-words">
+                  {debugProfileErr ? JSON.stringify(debugProfileErr, null, 2) : "—"}
+                </pre>
+              </div>
+            </div>
+          ) : null}
         </div>
 
-        {err && (
-          <div className="bg-red-600/20 border border-red-500/40 text-red-200 rounded-2xl p-4">
+        {err ? (
+          <div className="bg-red-600/20 border border-red-500/40 text-red-200 rounded-2xl p-4 whitespace-pre-wrap">
             {err}
           </div>
-        )}
-        {msg && (
+        ) : null}
+
+        {msg ? (
           <div className="bg-green-600/20 border border-green-500/40 text-green-200 rounded-2xl p-4">
             {msg}
           </div>
-        )}
+        ) : null}
 
         {mode === "signin" ? (
-          <form onSubmit={onSignIn} className="bg-[#111c44]/90 border border-white/10 rounded-2xl p-5 space-y-3 backdrop-blur">
+          <form
+            onSubmit={onSignIn}
+            className="bg-[#111c44]/80 border border-white/10 rounded-2xl p-5 space-y-3 backdrop-blur"
+          >
             <input
               className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
               placeholder="Email"
@@ -218,7 +276,10 @@ export default function RegisterPage() {
             </button>
           </form>
         ) : (
-          <form onSubmit={onSignUp} className="bg-[#111c44]/90 border border-white/10 rounded-2xl p-5 space-y-3 backdrop-blur">
+          <form
+            onSubmit={onSignUp}
+            className="bg-[#111c44]/80 border border-white/10 rounded-2xl p-5 space-y-3 backdrop-blur"
+          >
             <input
               className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
               placeholder="Full name"
