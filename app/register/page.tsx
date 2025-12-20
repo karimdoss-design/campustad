@@ -38,24 +38,24 @@ export default function RegisterPage() {
 
     // If profile not created yet, just go to app
     if (error || !prof) {
-      router.push("/app");
+      router.replace("/app");
       return;
     }
 
     // Admin → admin area
     if (prof.role === "admin" && prof.status === "active") {
-      router.push("/admin");
+      router.replace("/admin");
       return;
     }
 
     // Player pending → waiting page
     if (prof.role === "player" && prof.status === "pending") {
-      router.push("/waiting");
+      router.replace("/waiting");
       return;
     }
 
     // Everyone else → app
-    router.push("/app");
+    router.replace("/app");
   }
 
   async function onSignIn(e: React.FormEvent) {
@@ -99,13 +99,15 @@ export default function RegisterPage() {
       return;
     }
 
-    // Create auth user
+    // IMPORTANT: proper redirect origin (works on localhost + Vercel)
+    const origin =
+      typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
+
     const { data, error } = await supabase.auth.signUp({
       email: cleanEmail,
       password,
       options: {
-        // (Optional) If you later enable email confirmation, set redirect URL properly.
-        emailRedirectTo: "http://localhost:3000/app",
+        emailRedirectTo: `${origin}/app`,
       },
     });
 
@@ -144,19 +146,16 @@ export default function RegisterPage() {
 
     setMsg("Signed up ✅");
 
-    // Redirect based on status
-    if (role === "player") router.push("/waiting");
-    else router.push("/app");
+    if (role === "player") router.replace("/waiting");
+    else router.replace("/app");
   }
 
   return (
-    <div className="min-h-screen bg-[#0b1530] text-white p-6">
+    <div className="min-h-screen text-white p-6">
       <div className="max-w-md mx-auto space-y-4">
-        <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5">
+        <div className="bg-[#111c44]/90 border border-white/10 rounded-2xl p-5 backdrop-blur">
           <h1 className="text-2xl font-bold">Campustad</h1>
-          <p className="text-white/70">
-            {mode === "signup" ? "Create account" : "Sign in to your account"}
-          </p>
+          <p className="text-white/70">{mode === "signup" ? "Create account" : "Sign in to your account"}</p>
 
           <div className="mt-4 flex gap-2">
             <button
@@ -194,15 +193,13 @@ export default function RegisterPage() {
         )}
 
         {mode === "signin" ? (
-          <form
-            onSubmit={onSignIn}
-            className="bg-[#111c44] border border-white/10 rounded-2xl p-5 space-y-3"
-          >
+          <form onSubmit={onSignIn} className="bg-[#111c44]/90 border border-white/10 rounded-2xl p-5 space-y-3 backdrop-blur">
             <input
               className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
               placeholder="Email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
             />
             <input
               className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
@@ -210,6 +207,7 @@ export default function RegisterPage() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
             />
 
             <button
@@ -220,10 +218,7 @@ export default function RegisterPage() {
             </button>
           </form>
         ) : (
-          <form
-            onSubmit={onSignUp}
-            className="bg-[#111c44] border border-white/10 rounded-2xl p-5 space-y-3"
-          >
+          <form onSubmit={onSignUp} className="bg-[#111c44]/90 border border-white/10 rounded-2xl p-5 space-y-3 backdrop-blur">
             <input
               className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
               placeholder="Full name"
@@ -242,6 +237,7 @@ export default function RegisterPage() {
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
             />
+
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
@@ -272,6 +268,7 @@ export default function RegisterPage() {
               placeholder="Email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
             />
             <input
               className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
@@ -279,6 +276,7 @@ export default function RegisterPage() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              autoComplete="new-password"
             />
 
             <button

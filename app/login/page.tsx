@@ -14,13 +14,43 @@ export default function LoginPage() {
   const [err, setErr] = useState("");
   const [ok, setOk] = useState("");
 
+  async function afterLoginRedirect(userId: string) {
+    const { data: prof, error } = await supabase
+      .from("profiles")
+      .select("role,status")
+      .eq("id", userId)
+      .single();
+
+    // If profile not created yet, just go to app
+    if (error || !prof) {
+      router.replace("/app");
+      return;
+    }
+
+    // Admin → admin area
+    if (prof.role === "admin" && prof.status === "active") {
+      router.replace("/admin");
+      return;
+    }
+
+    // Player pending → waiting page
+    if (prof.role === "player" && prof.status === "pending") {
+      router.replace("/waiting");
+      return;
+    }
+
+    // Everyone else → app
+    router.replace("/app");
+  }
+
   useEffect(() => {
-    // If already logged in, go to app
+    // If already logged in, redirect based on role/status (NOT always /app)
     (async () => {
       const { data } = await supabase.auth.getUser();
-      if (data.user) router.replace("/app");
+      if (data.user) await afterLoginRedirect(data.user.id);
     })();
-  }, [router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -28,7 +58,7 @@ export default function LoginPage() {
     setOk("");
     setLoading(true);
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
     });
@@ -40,12 +70,17 @@ export default function LoginPage() {
       return;
     }
 
+    if (!data.user) {
+      setErr("No user returned from login.");
+      return;
+    }
+
     setOk("Logged in! Redirecting…");
-    router.replace("/app");
+    await afterLoginRedirect(data.user.id);
   }
 
   return (
-    <div className="min-h-screen bg-[#07102a] text-white flex items-center justify-center p-6">
+    <div className="min-h-screen text-white flex items-center justify-center p-6">
       <div className="w-full max-w-md bg-[#111c44]/90 border border-white/10 rounded-2xl p-6 backdrop-blur">
         <h1 className="text-2xl font-extrabold">Login</h1>
         <p className="text-white/60 text-sm mt-1">Welcome back to Campustad.</p>
