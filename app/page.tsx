@@ -21,7 +21,8 @@ export default function Home() {
   }, [router]);
 
   return (
-    <div className="min-h-screen bg-[#07102a] text-white flex items-center justify-center">
+    <div className="min-h-screen page-shell text-white p-6">
+
       <div className="text-white/80">Loading…</div>
     </div>
   );

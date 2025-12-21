@@ -19,35 +19,37 @@ export default function LoginPage() {
       .from("profiles")
       .select("role,status")
       .eq("id", userId)
-      .single();
+      .maybeSingle();
 
-    // If profile not created yet, just go to app
-    if (error || !prof) {
+    if (error) {
+      setErr(`Profile read blocked: ${error.message}`);
+      return;
+    }
+
+    if (!prof) {
       router.replace("/app");
       return;
     }
 
-    // Admin → admin area
     if (prof.role === "admin" && prof.status === "active") {
       router.replace("/admin");
       return;
     }
 
-    // Player pending → waiting page
     if (prof.role === "player" && prof.status === "pending") {
       router.replace("/waiting");
       return;
     }
 
-    // Everyone else → app
     router.replace("/app");
   }
 
   useEffect(() => {
-    // If already logged in, redirect based on role/status (NOT always /app)
     (async () => {
       const { data } = await supabase.auth.getUser();
-      if (data.user) await afterLoginRedirect(data.user.id);
+      if (data.user) {
+        await afterLoginRedirect(data.user.id);
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -80,12 +82,12 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen text-white flex items-center justify-center p-6">
-      <div className="w-full max-w-md bg-[#111c44]/90 border border-white/10 rounded-2xl p-6 backdrop-blur">
+    <div className="min-h-screen bg-transparent text-white flex items-center justify-center p-6">
+      <div className="w-full max-w-md bg-[#111c44]/85 border border-white/10 rounded-2xl p-6 backdrop-blur">
         <h1 className="text-2xl font-extrabold">Login</h1>
         <p className="text-white/60 text-sm mt-1">Welcome back to Campustad.</p>
 
-        {err ? <div className="mt-4 text-red-300 text-sm">{err}</div> : null}
+        {err ? <div className="mt-4 text-red-300 text-sm whitespace-pre-wrap">{err}</div> : null}
         {ok ? <div className="mt-4 text-green-300 text-sm">{ok}</div> : null}
 
         <form onSubmit={onSubmit} className="mt-5 space-y-3">
