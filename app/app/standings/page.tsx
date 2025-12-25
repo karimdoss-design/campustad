@@ -6,6 +6,13 @@ import { supabase } from "@/lib/supabaseClient";
 type Team = { id: string; name: string };
 type Group = { id: string; name: string };
 
+type TeamGroupRow = {
+  team_id: string;
+  group_id: string;
+  teams: { id: string; name: string } | null;
+  groups: { id: string; name: string } | null;
+};
+
 type MatchRow = {
   id: string;
   stage: "group" | "knockout";
@@ -16,7 +23,7 @@ type MatchRow = {
   status: "scheduled" | "finished";
   home_score: number | null;
   away_score: number | null;
-  knockout_round: string | null; // ✅ new
+  knockout_round: string | null;
 };
 
 function normRoundLabel(x: string | null) {
@@ -24,7 +31,6 @@ function normRoundLabel(x: string | null) {
   return s.length ? s : "Knockout";
 }
 
-// Flexible ordering (works with QF/SF/F, and also full words)
 function roundOrder(label: string) {
   const x = label.toLowerCase();
   if (x.includes("round of 16") || x.includes("r16") || x.includes("ro16")) return 1;
@@ -33,7 +39,7 @@ function roundOrder(label: string) {
   if (x.includes("third") || x.includes("3rd") || x.includes("bronze")) return 4;
   if (x.includes("final") || x === "f") return 5;
   if (x === "knockout") return 99;
-  return 50; // unknown custom rounds go in the middle
+  return 50;
 }
 
 export default function StandingsPage() {
@@ -42,21 +48,46 @@ export default function StandingsPage() {
 
   const [teams, setTeams] = useState<Team[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
+  const [teamGroups, setTeamGroups] = useState<TeamGroupRow[]>([]);
   const [groupMatches, setGroupMatches] = useState<MatchRow[]>([]);
   const [knockoutMatches, setKnockoutMatches] = useState<MatchRow[]>([]);
+
+  function fail(message: string) {
+    setErr(message);
+    setLoading(false);
+  }
 
   async function load() {
     setLoading(true);
     setErr("");
 
+    // 1) Teams
     const { data: t, error: tErr } = await supabase.from("teams").select("id,name").order("name");
     if (tErr) return fail(tErr.message);
     setTeams((t as Team[]) || []);
 
+    // 2) Groups
     const { data: g, error: gErr } = await supabase.from("groups").select("id,name").order("name");
     if (gErr) return fail(gErr.message);
     setGroups((g as Group[]) || []);
 
+    // 3) Team -> Group links (THIS IS THE IMPORTANT FIX)
+    // We read team_groups directly so any admin change appears for users.
+    const { data: tg, error: tgErr } = await supabase
+      .from("team_groups")
+      .select(
+        `
+        team_id,
+        group_id,
+        teams:teams (id,name),
+        groups:groups (id,name)
+      `
+      );
+
+    if (tgErr) return fail(tgErr.message);
+    setTeamGroups((tg as TeamGroupRow[]) || []);
+
+    // 4) Group stage matches (still needed to compute points)
     const { data: gm, error: gmErr } = await supabase
       .from("matches")
       .select("id,stage,group_id,home_team_id,away_team_id,start_time,status,home_score,away_score,knockout_round")
@@ -66,6 +97,7 @@ export default function StandingsPage() {
     if (gmErr) return fail(gmErr.message);
     setGroupMatches((gm as MatchRow[]) || []);
 
+    // 5) Knockout matches
     const { data: km, error: kmErr } = await supabase
       .from("matches")
       .select("id,stage,group_id,home_team_id,away_team_id,start_time,status,home_score,away_score,knockout_round")
@@ -78,11 +110,6 @@ export default function StandingsPage() {
     setLoading(false);
   }
 
-  function fail(message: string) {
-    setErr(message);
-    setLoading(false);
-  }
-
   useEffect(() => {
     load();
   }, []);
@@ -90,22 +117,25 @@ export default function StandingsPage() {
   const teamName = useMemo(() => {
     const m = new Map<string, string>();
     teams.forEach((t) => m.set(t.id, t.name));
+    // If team name not in teams array (rare), fallback to join data
+    teamGroups.forEach((tg) => {
+      if (tg.teams?.id && tg.teams?.name) m.set(tg.teams.id, tg.teams.name);
+    });
     return m;
-  }, [teams]);
+  }, [teams, teamGroups]);
 
-  // derive teams per group from group matches
+  // ✅ Teams per group NOW comes from team_groups, not matches.
   const teamsInGroup = useMemo(() => {
     const map = new Map<string, Set<string>>();
-    groupMatches.forEach((m) => {
-      if (!m.group_id) return;
-      if (!map.has(m.group_id)) map.set(m.group_id, new Set());
-      map.get(m.group_id)!.add(m.home_team_id);
-      map.get(m.group_id)!.add(m.away_team_id);
+    teamGroups.forEach((tg) => {
+      if (!tg.group_id || !tg.team_id) return;
+      if (!map.has(tg.group_id)) map.set(tg.group_id, new Set());
+      map.get(tg.group_id)!.add(tg.team_id);
     });
     return map;
-  }, [groupMatches]);
+  }, [teamGroups]);
 
-  // compute standings
+  // ✅ Standings computed from: (team_groups gives teams) + (finished group matches gives points)
   const standingsByGroup = useMemo(() => {
     const out: { group_id: string; rows: any[] }[] = [];
 
@@ -113,32 +143,57 @@ export default function StandingsPage() {
       const set = teamsInGroup.get(g.id) || new Set<string>();
       const table = new Map<string, any>();
 
+      // Initialize table with ALL teams in the group (even if no matches)
       for (const teamId of Array.from(set)) {
-        table.set(teamId, { team_id: teamId, played: 0, won: 0, draw: 0, lost: 0, gf: 0, ga: 0, gd: 0, pts: 0 });
+        table.set(teamId, {
+          team_id: teamId,
+          played: 0,
+          won: 0,
+          draw: 0,
+          lost: 0,
+          gf: 0,
+          ga: 0,
+          gd: 0,
+          pts: 0,
+        });
       }
 
+      // Apply finished match results
       groupMatches.forEach((m) => {
         if (m.group_id !== g.id) return;
         if (m.status !== "finished") return;
         if (m.home_score == null || m.away_score == null) return;
 
-        if (!table.has(m.home_team_id)) {
-          table.set(m.home_team_id, { team_id: m.home_team_id, played: 0, won: 0, draw: 0, lost: 0, gf: 0, ga: 0, gd: 0, pts: 0 });
-        }
-        if (!table.has(m.away_team_id)) {
-          table.set(m.away_team_id, { team_id: m.away_team_id, played: 0, won: 0, draw: 0, lost: 0, gf: 0, ga: 0, gd: 0, pts: 0 });
-        }
+        // Only count if both teams are in the group (safety)
+        if (!set.has(m.home_team_id) || !set.has(m.away_team_id)) return;
 
         const home = table.get(m.home_team_id);
         const away = table.get(m.away_team_id);
+        if (!home || !away) return;
 
-        home.played++; away.played++;
-        home.gf += m.home_score; home.ga += m.away_score;
-        away.gf += m.away_score; away.ga += m.home_score;
+        home.played++;
+        away.played++;
 
-        if (m.home_score > m.away_score) { home.won++; away.lost++; home.pts += 3; }
-        else if (m.home_score < m.away_score) { away.won++; home.lost++; away.pts += 3; }
-        else { home.draw++; away.draw++; home.pts += 1; away.pts += 1; }
+        home.gf += m.home_score;
+        home.ga += m.away_score;
+
+        away.gf += m.away_score;
+        away.ga += m.home_score;
+
+        if (m.home_score > m.away_score) {
+          home.won++;
+          away.lost++;
+          home.pts += 3;
+        } else if (m.home_score < m.away_score) {
+          away.won++;
+          home.lost++;
+          away.pts += 3;
+        } else {
+          home.draw++;
+          away.draw++;
+          home.pts += 1;
+          away.pts += 1;
+        }
 
         home.gd = home.gf - home.ga;
         away.gd = away.gf - away.ga;
@@ -158,7 +213,6 @@ export default function StandingsPage() {
     return out;
   }, [groups, teamsInGroup, groupMatches, teamName]);
 
-  // ✅ Knockout grouped by knockout_round (flexible)
   const knockoutGroups = useMemo(() => {
     const map = new Map<string, MatchRow[]>();
     knockoutMatches.forEach((m) => {
@@ -170,8 +224,7 @@ export default function StandingsPage() {
     const entries = Array.from(map.entries());
     entries.sort((a, b) => roundOrder(a[0]) - roundOrder(b[0]) || a[0].localeCompare(b[0]));
 
-    // sort matches inside each round by start_time
-    entries.forEach(([k, arr]) => {
+    entries.forEach(([_, arr]) => {
       arr.sort((x, y) => {
         const tx = x.start_time ? new Date(x.start_time).getTime() : 0;
         const ty = y.start_time ? new Date(y.start_time).getTime() : 0;
@@ -206,7 +259,7 @@ export default function StandingsPage() {
                   <div className="font-bold text-lg mb-3">{gName}</div>
 
                   {g.rows.length === 0 ? (
-                    <div className="text-white/70">No teams yet (add group-stage matches for this group).</div>
+                    <div className="text-white/70">No teams assigned yet.</div>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
