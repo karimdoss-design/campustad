@@ -7,6 +7,7 @@ import { supabase } from "@/lib/supabaseClient";
 type Team = { id: string; name: string };
 type Group = { id: string; name: string };
 
+// We load players from roster (players table)
 type Player = {
   id: string;
   display_name: string;
@@ -14,11 +15,12 @@ type Player = {
   position: string | null;
 };
 
+// Many schemas use team_players(team_id, player_id)
 type TeamPlayer = { team_id: string; player_id: string };
 
 type MatchRow = {
   id: string;
-  created_at: string;
+  created_at: string | null;
   stage: "group" | "knockout";
   group_id: string | null;
 
@@ -30,8 +32,9 @@ type MatchRow = {
   home_score: number;
   away_score: number;
 
+  // Optional columns (some DBs may not have them)
   knockout_round: string | null;
-  knockout_order: number;
+  knockout_order: number | null;
   knockout_label: string | null;
 
   motm_player_id: string | null;
@@ -44,8 +47,7 @@ type GoalRow = {
   scorer_player_id: string;
   assist_player_id: string | null;
   minute: number | null;
-  sort_order: number | null;
-  created_at: string;
+  created_at: string | null;
 };
 
 function fmtKickoff(iso: string | null) {
@@ -54,6 +56,27 @@ function fmtKickoff(iso: string | null) {
     return new Date(iso).toLocaleString();
   } catch {
     return iso;
+  }
+}
+
+/**
+ * Optional: call a Supabase RPC if it exists, but NEVER break the page if not.
+ * If you later add SQL functions like:
+ *  - recalc_match_stats(match_id uuid)
+ *  - grade_predictions_for_match(match_id uuid)
+ * this page will automatically use them.
+ */
+async function maybeRpc(fnName: string, args: Record<string, any>) {
+  try {
+    const { error } = await supabase.rpc(fnName as any, args as any);
+    // If function doesn't exist, Supabase often returns 42883 (undefined_function)
+    if (error) {
+      // ignore missing function; show other errors in console
+      if (String((error as any).code) === "42883") return;
+      console.warn(`[RPC ${fnName}]`, error);
+    }
+  } catch (e) {
+    console.warn(`[RPC ${fnName}] crashed`, e);
   }
 }
 
@@ -105,6 +128,7 @@ export default function AdminMatchesPage() {
       router.replace("/app");
       return false;
     }
+
     return true;
   }
 
@@ -127,20 +151,18 @@ export default function AdminMatchesPage() {
   }, [players]);
 
   const playersByTeam = useMemo(() => {
-    const map = new Map<string, Player[]>();
     const idsByTeam = new Map<string, string[]>();
-
     teamPlayers.forEach((tp) => {
       if (!idsByTeam.has(tp.team_id)) idsByTeam.set(tp.team_id, []);
       idsByTeam.get(tp.team_id)!.push(tp.player_id);
     });
 
+    const map = new Map<string, Player[]>();
     for (const [teamId, ids] of idsByTeam.entries()) {
       const arr = ids.map((id) => playerById.get(id)).filter(Boolean) as Player[];
       arr.sort((a, b) => a.display_name.localeCompare(b.display_name));
       map.set(teamId, arr);
     }
-
     return map;
   }, [teamPlayers, playerById]);
 
@@ -156,66 +178,126 @@ export default function AdminMatchesPage() {
         const ma = a.minute ?? 10_000;
         const mb = b.minute ?? 10_000;
         if (ma !== mb) return ma - mb;
-        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return ta - tb;
       });
       map.set(k, arr);
     }
-
     return map;
   }, [goals]);
 
-  async function load() {
-    setLoading(true);
+  async function loadAll() {
     setErr("");
+    setLoading(true);
 
-    const { data: t, error: tErr } = await supabase.from("teams").select("id,name").order("name");
-    if (tErr) return fail(tErr.message);
-    setTeams((t as Team[]) || []);
+    try {
+      // 1) Teams
+      const { data: t, error: tErr } = await supabase.from("teams").select("id,name").order("name");
+      if (tErr) throw new Error(`teams: ${tErr.message}`);
+      setTeams((t as Team[]) || []);
 
-    const { data: g, error: gErr } = await supabase.from("groups").select("id,name").order("name");
-    if (gErr) return fail(gErr.message);
-    setGroups((g as Group[]) || []);
+      // 2) Groups
+      const { data: g, error: gErr } = await supabase.from("groups").select("id,name").order("name");
+      if (gErr) throw new Error(`groups: ${gErr.message}`);
+      setGroups((g as Group[]) || []);
 
-    const { data: p, error: pErr } = await supabase
-      .from("players")
-      .select("id,display_name,university,position")
-      .order("display_name");
-    if (pErr) return fail(pErr.message);
-    setPlayers((p as Player[]) || []);
+      // 3) Players (try display_name, fallback full_name)
+      const { data: pRaw, error: pErr } = await supabase
+        .from("players")
+        .select("id,display_name,full_name,university,position")
+        .order("display_name", { ascending: true });
 
-    const { data: tp, error: tpErr } = await supabase.from("team_players").select("team_id,player_id");
-    if (tpErr) return fail(tpErr.message);
-    setTeamPlayers((tp as TeamPlayer[]) || []);
+      if (pErr) throw new Error(`players: ${pErr.message}`);
 
-    const { data: m, error: mErr } = await supabase
-      .from("matches")
-      .select(
-        "id,created_at,stage,group_id,home_team_id,away_team_id,start_time,status,home_score,away_score,knockout_round,knockout_order,knockout_label,motm_player_id"
-      )
-      .order("start_time", { ascending: true, nullsFirst: false });
-    if (mErr) return fail(mErr.message);
-    setMatches((m as MatchRow[]) || []);
+      const pFixed: Player[] = ((pRaw as any[]) || []).map((r) => ({
+        id: String(r.id),
+        display_name: String(r.display_name || r.full_name || "Unnamed"),
+        university: r.university ?? null,
+        position: r.position ?? null,
+      }));
+      setPlayers(pFixed);
 
-    const { data: gl, error: glErr } = await supabase
-      .from("match_goals")
-      .select("id,match_id,scoring_team_id,scorer_player_id,assist_player_id,minute,sort_order,created_at")
-      .order("created_at", { ascending: true });
-    if (glErr) return fail(glErr.message);
-    setGoals((gl as GoalRow[]) || []);
+      // 4) Team players
+      const { data: tp, error: tpErr } = await supabase.from("team_players").select("team_id,player_id");
+      if (tpErr) throw new Error(`team_players: ${tpErr.message}`);
+      setTeamPlayers((tp as TeamPlayer[]) || []);
 
-    setLoading(false);
-  }
+      // 5) Matches (try full select; fallback if columns missing)
+      let mData: any[] | null = null;
 
-  function fail(message: string) {
-    setErr(message);
-    setLoading(false);
+      const fullSelect =
+        "id,created_at,stage,group_id,home_team_id,away_team_id,start_time,status,home_score,away_score,knockout_round,knockout_order,knockout_label,motm_player_id";
+
+      const basicSelect =
+        "id,created_at,stage,group_id,home_team_id,away_team_id,start_time,status,home_score,away_score";
+
+      const fullTry = await supabase
+        .from("matches")
+        .select(fullSelect)
+        .order("start_time", { ascending: true, nullsFirst: false });
+
+      if (fullTry.error) {
+        // fallback
+        const basicTry = await supabase
+          .from("matches")
+          .select(basicSelect)
+          .order("start_time", { ascending: true, nullsFirst: false });
+
+        if (basicTry.error) throw new Error(`matches: ${basicTry.error.message}`);
+        mData = (basicTry.data as any[]) || [];
+      } else {
+        mData = (fullTry.data as any[]) || [];
+      }
+
+      const mFixed: MatchRow[] = (mData || []).map((r) => ({
+        id: String(r.id),
+        created_at: r.created_at ?? null,
+        stage: (r.stage === "knockout" ? "knockout" : "group") as any,
+        group_id: r.group_id ?? null,
+        home_team_id: String(r.home_team_id),
+        away_team_id: String(r.away_team_id),
+        start_time: r.start_time ?? null,
+        status: (r.status === "finished" ? "finished" : "scheduled") as any,
+        home_score: Number.isFinite(Number(r.home_score)) ? Number(r.home_score) : 0,
+        away_score: Number.isFinite(Number(r.away_score)) ? Number(r.away_score) : 0,
+        knockout_round: r.knockout_round ?? null,
+        knockout_order: r.knockout_order ?? null,
+        knockout_label: r.knockout_label ?? null,
+        motm_player_id: r.motm_player_id ?? null,
+      }));
+      setMatches(mFixed);
+
+      // 6) Goals (table name: match_goals, fallback to match_goals minimal)
+      const goalTry = await supabase
+        .from("match_goals")
+        .select("id,match_id,scoring_team_id,scorer_player_id,assist_player_id,minute,created_at")
+        .order("created_at", { ascending: true });
+
+      if (goalTry.error) throw new Error(`match_goals: ${goalTry.error.message}`);
+
+      const gFixed: GoalRow[] = ((goalTry.data as any[]) || []).map((r) => ({
+        id: String(r.id),
+        match_id: String(r.match_id),
+        scoring_team_id: String(r.scoring_team_id),
+        scorer_player_id: String(r.scorer_player_id),
+        assist_player_id: r.assist_player_id ? String(r.assist_player_id) : null,
+        minute: r.minute == null ? null : Number(r.minute),
+        created_at: r.created_at ?? null,
+      }));
+      setGoals(gFixed);
+    } catch (e: any) {
+      setErr(e?.message ? String(e.message) : String(e));
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
     (async () => {
       const ok = await requireAdmin();
       if (!ok) return;
-      await load();
+      await loadAll();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -229,7 +311,6 @@ export default function AdminMatchesPage() {
 
     const start_time = startLocal ? new Date(startLocal).toISOString() : null;
 
-    // ✅ NEVER allow null knockout_order (your DB requires NOT NULL)
     const safeOrder =
       stage === "knockout"
         ? Math.max(1, Number.isFinite(Number(kOrder)) ? Number(kOrder) : 1)
@@ -242,54 +323,71 @@ export default function AdminMatchesPage() {
       away_team_id: awayId,
       start_time,
       status: "scheduled",
-
-      // keep 0-0 initially (works with NOT NULL constraints)
       home_score: 0,
       away_score: 0,
-
       knockout_round: stage === "knockout" ? kRound : null,
-      knockout_order: safeOrder,
+      knockout_order: stage === "knockout" ? safeOrder : null,
       knockout_label: stage === "knockout" ? (kLabel.trim() || null) : null,
-
       motm_player_id: null,
     };
 
-    const { error } = await supabase.from("matches").insert(payload);
+    const { data, error } = await supabase.from("matches").insert(payload).select("id").single();
     if (error) return setErr(error.message);
+
+    // optional: recalc
+    if (data?.id) {
+      await maybeRpc("recalc_match_stats", { match_id: data.id });
+      await maybeRpc("grade_predictions_for_match", { match_id: data.id });
+    }
 
     setHomeId("");
     setAwayId("");
     setStartLocal("");
     setKLabel("");
-    await load();
+    await loadAll();
   }
 
   async function updateScore(matchId: string, home: number, away: number) {
     setErr("");
     const { error } = await supabase.from("matches").update({ home_score: home, away_score: away }).eq("id", matchId);
-    if (error) setErr(error.message);
-    else await load();
+    if (error) return setErr(error.message);
+
+    await maybeRpc("recalc_match_stats", { match_id: matchId });
+    await maybeRpc("grade_predictions_for_match", { match_id: matchId });
+    await loadAll();
   }
 
   async function setStatus(matchId: string, status: "scheduled" | "finished") {
     setErr("");
     const { error } = await supabase.from("matches").update({ status }).eq("id", matchId);
-    if (error) setErr(error.message);
-    else await load();
+    if (error) return setErr(error.message);
+
+    await maybeRpc("recalc_match_stats", { match_id: matchId });
+    await maybeRpc("grade_predictions_for_match", { match_id: matchId });
+    await loadAll();
   }
 
   async function deleteMatch(matchId: string) {
     setErr("");
+
+    // delete goals first (safe)
+    const { error: gErr } = await supabase.from("match_goals").delete().eq("match_id", matchId);
+    if (gErr) return setErr(gErr.message);
+
     const { error } = await supabase.from("matches").delete().eq("id", matchId);
-    if (error) setErr(error.message);
-    else await load();
+    if (error) return setErr(error.message);
+
+    await maybeRpc("recalc_match_stats", { match_id: matchId });
+    await loadAll();
   }
 
   async function setMotm(matchId: string, motmId: string | null) {
     setErr("");
     const { error } = await supabase.from("matches").update({ motm_player_id: motmId }).eq("id", matchId);
-    if (error) setErr(error.message);
-    else await load();
+    if (error) return setErr(error.message);
+
+    await maybeRpc("recalc_match_stats", { match_id: matchId });
+    await loadAll();
   }
 
   async function addGoal(payload: {
@@ -300,19 +398,23 @@ export default function AdminMatchesPage() {
     minute: number | null;
   }) {
     setErr("");
-    const { error } = await supabase.from("match_goals").insert({
-      ...payload,
-      sort_order: 0,
-    });
-    if (error) setErr(error.message);
-    else await load();
+
+    const { error } = await supabase.from("match_goals").insert(payload);
+    if (error) return setErr(error.message);
+
+    await maybeRpc("recalc_match_stats", { match_id: payload.match_id });
+    await maybeRpc("grade_predictions_for_match", { match_id: payload.match_id });
+    await loadAll();
   }
 
-  async function deleteGoal(goalId: string) {
+  async function deleteGoal(goalId: string, matchId: string) {
     setErr("");
     const { error } = await supabase.from("match_goals").delete().eq("id", goalId);
-    if (error) setErr(error.message);
-    else await load();
+    if (error) return setErr(error.message);
+
+    await maybeRpc("recalc_match_stats", { match_id: matchId });
+    await maybeRpc("grade_predictions_for_match", { match_id: matchId });
+    await loadAll();
   }
 
   async function logout() {
@@ -330,11 +432,18 @@ export default function AdminMatchesPage() {
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5 flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold">Admin • Matches</h1>
-            <p className="text-white/70">Create matches, save scores, add goals/assists, set MOTM.</p>
+            <p className="text-white/70">
+              Create matches, set score, add goals/assists, set MOTM. This page is the “engine” that powers standings,
+              leaderboards, and predictions.
+            </p>
+            <div className="text-white/50 text-xs mt-2">
+              Loaded: {teams.length} teams • {groups.length} groups • {players.length} players • {matches.length} matches
+            </div>
           </div>
+
           <div className="flex gap-2">
             <button
-              onClick={load}
+              onClick={loadAll}
               className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold"
             >
               Refresh
@@ -348,7 +457,16 @@ export default function AdminMatchesPage() {
           </div>
         </div>
 
-        {err && <div className="text-red-400">{err}</div>}
+        {err && (
+          <div className="bg-red-600/20 border border-red-500/40 text-red-200 rounded-2xl p-4">
+            <div className="font-bold">Error (this is why you saw a white page):</div>
+            <div className="mt-1 text-sm whitespace-pre-wrap">{err}</div>
+            <div className="mt-2 text-xs text-red-200/80">
+              If this says something like <b>“column does not exist”</b> or <b>“relation does not exist”</b>, send me that
+              exact message and I’ll match your DB schema perfectly.
+            </div>
+          </div>
+        )}
 
         {/* CREATE MATCH */}
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5 space-y-3">
@@ -405,7 +523,7 @@ export default function AdminMatchesPage() {
                 </div>
 
                 <div className="space-y-1">
-                  <div className="text-white/70 text-sm">Knockout Order (1,2,3...)</div>
+                  <div className="text-white/70 text-sm">Knockout Order (1,2,3…)</div>
                   <input
                     value={kOrder}
                     onChange={(e) => setKOrder(e.target.value)}
@@ -477,7 +595,8 @@ export default function AdminMatchesPage() {
           </button>
 
           <div className="text-white/50 text-xs">
-            Note: Match starts at 0-0. You can edit score, goals, assists, minute, and MOTM anytime.
+            Tip: After you mark a match <b>finished</b>, standings + leaderboards will update (either directly from matches
+            table, or via your DB triggers/RPC).
           </div>
         </div>
 
@@ -508,6 +627,13 @@ export default function AdminMatchesPage() {
               ))}
             </div>
           )}
+        </div>
+
+        <div className="text-white/50 text-xs">
+          If your DB has triggers/functions, this page will automatically “power”:
+          <br />• Player stats (goals/assists/MOTM)
+          <br />• Standings (computed from finished group matches)
+          <br />• Prediction scoring (fan points)
         </div>
       </div>
     </div>
@@ -545,7 +671,7 @@ function MatchCard({
     assist_player_id: string | null;
     minute: number | null;
   }) => Promise<void>;
-  onDeleteGoal: (goalId: string) => Promise<void>;
+  onDeleteGoal: (goalId: string, matchId: string) => Promise<void>;
 }) {
   const homeTeam = teamNameById.get(match.home_team_id) || "Home";
   const awayTeam = teamNameById.get(match.away_team_id) || "Away";
@@ -555,7 +681,7 @@ function MatchCard({
       ? `Group • ${match.group_id ? groupNameById.get(match.group_id) || "—" : "—"}`
       : `Knockout${match.knockout_round ? ` • ${match.knockout_round}` : ""}${
           match.knockout_order != null ? ` • #${match.knockout_order}` : ""
-        }`;
+        }${match.knockout_label ? ` • ${match.knockout_label}` : ""}`;
 
   const kickoff = fmtKickoff(match.start_time);
 
@@ -577,7 +703,7 @@ function MatchCard({
     await onUpdateScore(match.id, h, a);
   }
 
-  // Add goal form state
+  // Add goal form
   const [goalTeamId, setGoalTeamId] = useState<string>(match.home_team_id);
   const [scorerId, setScorerId] = useState<string>("");
   const [assistId, setAssistId] = useState<string>("");
@@ -592,11 +718,9 @@ function MatchCard({
 
   const playersForGoalTeam = goalTeamId === match.home_team_id ? homePlayers : awayPlayers;
 
-  const scoreText = `${match.home_score} - ${match.away_score}`;
-
   return (
     <div className="bg-[#0b1530] border border-[#1f2a60] rounded-2xl p-4 space-y-4">
-      {/* header */}
+      {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
         <div>
           <div className="text-lg font-bold">
@@ -638,7 +762,10 @@ function MatchCard({
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="font-bold">Score</div>
           <div className="text-white/60 text-sm">
-            Current: <b className="text-white">{scoreText}</b>
+            Current:{" "}
+            <b className="text-white">
+              {match.home_score} - {match.away_score}
+            </b>
           </div>
         </div>
 
@@ -667,18 +794,25 @@ function MatchCard({
       {/* MOTM */}
       <div className="bg-[#111c44] border border-white/10 rounded-2xl p-4 space-y-2">
         <div className="font-bold">Man of the Match (MOTM)</div>
-        <select
-          className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
-          value={match.motm_player_id || ""}
-          onChange={(e) => onSetMotm(match.id, e.target.value || null)}
-        >
-          <option value="">(No MOTM)</option>
-          {selectablePlayers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.display_name} {p.university ? `• ${p.university}` : ""}
-            </option>
-          ))}
-        </select>
+
+        {selectablePlayers.length === 0 ? (
+          <div className="text-white/70 text-sm">
+            No roster players linked to these teams yet. (Admin: assign roster players to teams in <b>/admin/team-players</b>)
+          </div>
+        ) : (
+          <select
+            className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
+            value={match.motm_player_id || ""}
+            onChange={(e) => onSetMotm(match.id, e.target.value || null)}
+          >
+            <option value="">(No MOTM)</option>
+            {selectablePlayers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.display_name} {p.university ? `• ${p.university}` : ""}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       {/* GOALS */}
@@ -708,6 +842,7 @@ function MatchCard({
               className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-2 outline-none"
               value={scorerId}
               onChange={(e) => setScorerId(e.target.value)}
+              disabled={playersForGoalTeam.length === 0}
             >
               <option value="">Select scorer</option>
               {playersForGoalTeam.map((p) => (
@@ -724,6 +859,7 @@ function MatchCard({
               className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-2 outline-none"
               value={assistId}
               onChange={(e) => setAssistId(e.target.value)}
+              disabled={playersForGoalTeam.length === 0}
             >
               <option value="">(No assist)</option>
               {playersForGoalTeam
@@ -777,9 +913,7 @@ function MatchCard({
           <div className="space-y-2">
             {goals.map((g) => {
               const scorer = playerById.get(g.scorer_player_id)?.display_name || "Unknown";
-              const assist = g.assist_player_id
-                ? playerById.get(g.assist_player_id)?.display_name || "Unknown"
-                : null;
+              const assist = g.assist_player_id ? playerById.get(g.assist_player_id)?.display_name || "Unknown" : null;
 
               const team = teamNameById.get(g.scoring_team_id) || "Team";
               const min = g.minute != null ? `${g.minute}'` : "";
@@ -799,7 +933,7 @@ function MatchCard({
                     </div>
                   </div>
                   <button
-                    onClick={() => onDeleteGoal(g.id)}
+                    onClick={() => onDeleteGoal(g.id, match.id)}
                     className="bg-red-600 hover:bg-red-500 transition px-3 py-2 rounded-xl font-bold"
                   >
                     Delete
@@ -811,7 +945,8 @@ function MatchCard({
         )}
 
         <div className="text-white/50 text-xs">
-          (Stats updates are handled by your database functions/triggers you already set up.)
+          If you have DB triggers/functions, stats + predictions are recalculated automatically. If not, tell me and I’ll
+          give you the exact SQL to make it 100% automatic.
         </div>
       </div>
     </div>
