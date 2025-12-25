@@ -6,13 +6,6 @@ import { supabase } from "@/lib/supabaseClient";
 type Team = { id: string; name: string };
 type Group = { id: string; name: string };
 
-type TeamGroupRow = {
-  team_id: string;
-  group_id: string;
-  teams: { id: string; name: string } | null;
-  groups: { id: string; name: string } | null;
-};
-
 type MatchRow = {
   id: string;
   stage: "group" | "knockout";
@@ -26,11 +19,27 @@ type MatchRow = {
   knockout_round: string | null;
 };
 
+/** Supabase join sometimes returns object OR array depending on FK settings */
+type JoinOne<T> = T | T[] | null;
+
+type TeamGroupRow = {
+  team_id: string;
+  group_id: string;
+  teams: JoinOne<{ id: string; name: string }>;
+  groups: JoinOne<{ id: string; name: string }>;
+};
+
+function pickOne<T>(x: JoinOne<T>): T | null {
+  if (!x) return null;
+  return Array.isArray(x) ? x[0] ?? null : x;
+}
+
 function normRoundLabel(x: string | null) {
   const s = (x || "").trim();
   return s.length ? s : "Knockout";
 }
 
+// Flexible ordering (works with QF/SF/F, and also full words)
 function roundOrder(label: string) {
   const x = label.toLowerCase();
   if (x.includes("round of 16") || x.includes("r16") || x.includes("ro16")) return 1;
@@ -39,7 +48,7 @@ function roundOrder(label: string) {
   if (x.includes("third") || x.includes("3rd") || x.includes("bronze")) return 4;
   if (x.includes("final") || x === "f") return 5;
   if (x === "knockout") return 99;
-  return 50;
+  return 50; // unknown custom rounds go in the middle
 }
 
 export default function StandingsPage() {
@@ -61,33 +70,33 @@ export default function StandingsPage() {
     setLoading(true);
     setErr("");
 
-    // 1) Teams
+    // Teams
     const { data: t, error: tErr } = await supabase.from("teams").select("id,name").order("name");
     if (tErr) return fail(tErr.message);
     setTeams((t as Team[]) || []);
 
-    // 2) Groups
+    // Groups
     const { data: g, error: gErr } = await supabase.from("groups").select("id,name").order("name");
     if (gErr) return fail(gErr.message);
     setGroups((g as Group[]) || []);
 
-    // 3) Team -> Group links (THIS IS THE IMPORTANT FIX)
-    // We read team_groups directly so any admin change appears for users.
+    // Team -> Group mapping (THIS is what makes user see changes instantly)
+    // Using your table: team_groups
     const { data: tg, error: tgErr } = await supabase
       .from("team_groups")
       .select(
         `
         team_id,
         group_id,
-        teams:teams (id,name),
-        groups:groups (id,name)
+        teams:team_id ( id, name ),
+        groups:group_id ( id, name )
       `
       );
 
     if (tgErr) return fail(tgErr.message);
-    setTeamGroups((tg as TeamGroupRow[]) || []);
+    setTeamGroups((((tg as any[]) || []) as TeamGroupRow[]) || []);
 
-    // 4) Group stage matches (still needed to compute points)
+    // Group matches
     const { data: gm, error: gmErr } = await supabase
       .from("matches")
       .select("id,stage,group_id,home_team_id,away_team_id,start_time,status,home_score,away_score,knockout_round")
@@ -97,7 +106,7 @@ export default function StandingsPage() {
     if (gmErr) return fail(gmErr.message);
     setGroupMatches((gm as MatchRow[]) || []);
 
-    // 5) Knockout matches
+    // Knockout matches
     const { data: km, error: kmErr } = await supabase
       .from("matches")
       .select("id,stage,group_id,home_team_id,away_team_id,start_time,status,home_score,away_score,knockout_round")
@@ -117,14 +126,30 @@ export default function StandingsPage() {
   const teamName = useMemo(() => {
     const m = new Map<string, string>();
     teams.forEach((t) => m.set(t.id, t.name));
-    // If team name not in teams array (rare), fallback to join data
+
+    // fallback: if a team didn't load for any reason but join has it
     teamGroups.forEach((tg) => {
-      if (tg.teams?.id && tg.teams?.name) m.set(tg.teams.id, tg.teams.name);
+      const t = pickOne(tg.teams);
+      if (t?.id && t?.name) m.set(t.id, t.name);
     });
+
     return m;
   }, [teams, teamGroups]);
 
-  // ✅ Teams per group NOW comes from team_groups, not matches.
+  const groupName = useMemo(() => {
+    const m = new Map<string, string>();
+    groups.forEach((g) => m.set(g.id, g.name));
+
+    // fallback join
+    teamGroups.forEach((tg) => {
+      const g = pickOne(tg.groups);
+      if (g?.id && g?.name) m.set(g.id, g.name);
+    });
+
+    return m;
+  }, [groups, teamGroups]);
+
+  /** ✅ teams per group comes from team_groups table (not matches) */
   const teamsInGroup = useMemo(() => {
     const map = new Map<string, Set<string>>();
     teamGroups.forEach((tg) => {
@@ -135,7 +160,7 @@ export default function StandingsPage() {
     return map;
   }, [teamGroups]);
 
-  // ✅ Standings computed from: (team_groups gives teams) + (finished group matches gives points)
+  /** Compute standings based on finished GROUP matches */
   const standingsByGroup = useMemo(() => {
     const out: { group_id: string; rows: any[] }[] = [];
 
@@ -143,7 +168,7 @@ export default function StandingsPage() {
       const set = teamsInGroup.get(g.id) || new Set<string>();
       const table = new Map<string, any>();
 
-      // Initialize table with ALL teams in the group (even if no matches)
+      // ensure each mapped team has a row even before matches
       for (const teamId of Array.from(set)) {
         table.set(teamId, {
           team_id: teamId,
@@ -158,25 +183,47 @@ export default function StandingsPage() {
         });
       }
 
-      // Apply finished match results
+      // apply finished matches
       groupMatches.forEach((m) => {
         if (m.group_id !== g.id) return;
         if (m.status !== "finished") return;
         if (m.home_score == null || m.away_score == null) return;
 
-        // Only count if both teams are in the group (safety)
-        if (!set.has(m.home_team_id) || !set.has(m.away_team_id)) return;
+        if (!table.has(m.home_team_id)) {
+          table.set(m.home_team_id, {
+            team_id: m.home_team_id,
+            played: 0,
+            won: 0,
+            draw: 0,
+            lost: 0,
+            gf: 0,
+            ga: 0,
+            gd: 0,
+            pts: 0,
+          });
+        }
+        if (!table.has(m.away_team_id)) {
+          table.set(m.away_team_id, {
+            team_id: m.away_team_id,
+            played: 0,
+            won: 0,
+            draw: 0,
+            lost: 0,
+            gf: 0,
+            ga: 0,
+            gd: 0,
+            pts: 0,
+          });
+        }
 
         const home = table.get(m.home_team_id);
         const away = table.get(m.away_team_id);
-        if (!home || !away) return;
 
         home.played++;
         away.played++;
 
         home.gf += m.home_score;
         home.ga += m.away_score;
-
         away.gf += m.away_score;
         away.ga += m.home_score;
 
@@ -213,6 +260,7 @@ export default function StandingsPage() {
     return out;
   }, [groups, teamsInGroup, groupMatches, teamName]);
 
+  /** Knockout grouped by knockout_round */
   const knockoutGroups = useMemo(() => {
     const map = new Map<string, MatchRow[]>();
     knockoutMatches.forEach((m) => {
@@ -224,7 +272,8 @@ export default function StandingsPage() {
     const entries = Array.from(map.entries());
     entries.sort((a, b) => roundOrder(a[0]) - roundOrder(b[0]) || a[0].localeCompare(b[0]));
 
-    entries.forEach(([_, arr]) => {
+    // sort matches inside each round by start_time
+    entries.forEach(([k, arr]) => {
       arr.sort((x, y) => {
         const tx = x.start_time ? new Date(x.start_time).getTime() : 0;
         const ty = y.start_time ? new Date(y.start_time).getTime() : 0;
@@ -246,20 +295,26 @@ export default function StandingsPage() {
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <h1 className="text-2xl font-bold">Groups</h1>
-            <button onClick={load} className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold">
+            <button
+              onClick={load}
+              className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold"
+            >
               Refresh
             </button>
           </div>
 
           <div className="grid md:grid-cols-2 gap-4 mt-4">
             {standingsByGroup.map((g) => {
-              const gName = groups.find((x) => x.id === g.group_id)?.name || "Group";
+              const gName = groupName.get(g.group_id) || "Group";
+
               return (
                 <div key={g.group_id} className="bg-[#0b1530] border border-[#1f2a60] rounded-2xl p-4">
                   <div className="font-bold text-lg mb-3">{gName}</div>
 
                   {g.rows.length === 0 ? (
-                    <div className="text-white/70">No teams assigned yet.</div>
+                    <div className="text-white/70">
+                      No teams in this group yet. (Admin: assign teams to this group)
+                    </div>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
@@ -288,6 +343,10 @@ export default function StandingsPage() {
                           ))}
                         </tbody>
                       </table>
+
+                      <div className="text-white/50 text-xs mt-2">
+                        Note: points & GD appear after group matches are marked as finished.
+                      </div>
                     </div>
                   )}
                 </div>
