@@ -3,42 +3,24 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { adminAction } from "@/lib/adminApi";
 
-type Team = {
-  id: string;
-  name: string;
-};
-
-type Player = {
-  id: string;
-  full_name: string;
-  university: string | null;
-  position: string | null;
-};
+type Team = { id: string; name: string };
+type Player = { id: string; full_name: string; display_name: string | null };
 
 export default function AdminTeamPlayersPage() {
   const router = useRouter();
-
   const [teams, setTeams] = useState<Team[]>([]);
   const [players, setPlayers] = useState<Player[]>([]);
-  const [selectedTeam, setSelectedTeam] = useState("");
   const [teamPlayers, setTeamPlayers] = useState<Player[]>([]);
+  const [selectedTeam, setSelectedTeam] = useState("");
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
 
   async function requireAdmin() {
     const { data } = await supabase.auth.getUser();
-    if (!data.user) {
-      router.push("/register");
-      return false;
-    }
+    if (!data.user) return router.push("/register");
 
-    const { data: me } = await supabase
-      .from("profiles")
-      .select("role,status")
-      .eq("id", data.user.id)
-      .single();
-
+    const { data: me } = await supabase.from("profiles").select("role,status").eq("id", data.user.id).single();
     if (me?.role !== "admin" || me?.status !== "active") {
       router.push("/app");
       return false;
@@ -46,173 +28,93 @@ export default function AdminTeamPlayersPage() {
     return true;
   }
 
-  async function loadTeams() {
-    const { data, error } = await supabase
-      .from("teams")
-      .select("id,name")
-      .order("name");
-    if (error) setError(error.message);
-    setTeams((data as Team[]) || []);
-  }
-
-  async function loadPlayers() {
-    const { data, error } = await supabase
-      .from("players")
-      .select("id,full_name,university,position")
-      .order("full_name");
-    if (error) setError(error.message);
-    setPlayers((data as Player[]) || []);
+  async function load() {
+    const { data: t } = await supabase.from("teams").select("id,name");
+    const { data: p } = await supabase.from("players").select("id,full_name,display_name");
+    setTeams((t as Team[]) || []);
+    setPlayers((p as Player[]) || []);
   }
 
   async function loadTeamPlayers(teamId: string) {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("team_players")
-      .select("players(id,full_name,university,position)")
+      .select("players(id,full_name,display_name)")
       .eq("team_id", teamId);
 
-    if (error) {
-      setError(error.message);
-      setTeamPlayers([]);
-      return;
+    setTeamPlayers(data?.map((r: any) => r.players) || []);
+  }
+
+  async function add(playerId: string) {
+    try {
+      await adminAction("addTeamPlayer", { team_id: selectedTeam, player_id: playerId });
+      await loadTeamPlayers(selectedTeam);
+    } catch (e: any) {
+      setError(e.message);
     }
-
-    const mapped =
-      data?.map((r: any) => r.players).filter(Boolean) || [];
-    setTeamPlayers(mapped);
   }
 
-  async function addPlayer(playerId: string) {
-    if (!selectedTeam) return;
-    setError("");
-
-    const { error } = await supabase.from("team_players").insert({
-      team_id: selectedTeam,
-      player_id: playerId,
-    });
-
-    if (error) setError(error.message);
-    else await loadTeamPlayers(selectedTeam);
+  async function remove(playerId: string) {
+    try {
+      await adminAction("removeTeamPlayer", { team_id: selectedTeam, player_id: playerId });
+      await loadTeamPlayers(selectedTeam);
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
-  async function removePlayer(playerId: string) {
-    if (!selectedTeam) return;
-    setError("");
-
-    const { error } = await supabase
-      .from("team_players")
-      .delete()
-      .eq("team_id", selectedTeam)
-      .eq("player_id", playerId);
-
-    if (error) setError(error.message);
-    else await loadTeamPlayers(selectedTeam);
-  }
-
-  const availablePlayers = useMemo(() => {
-    const ids = new Set(teamPlayers.map((p) => p.id));
-    return players.filter((p) => !ids.has(p.id));
+  const available = useMemo(() => {
+    const used = new Set(teamPlayers.map((p) => p.id));
+    return players.filter((p) => !used.has(p.id));
   }, [players, teamPlayers]);
 
   useEffect(() => {
     (async () => {
-      const ok = await requireAdmin();
-      if (!ok) return;
-      await Promise.all([loadTeams(), loadPlayers()]);
-      setLoading(false);
+      await requireAdmin();
+      await load();
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (selectedTeam) loadTeamPlayers(selectedTeam);
-    else setTeamPlayers([]);
   }, [selectedTeam]);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#0b1530] text-white p-8">
-        Loading...
-      </div>
-    );
-  }
-
   return (
-    <div className="min-h-screen bg-[#0b1530] text-white p-6">
-      <div className="max-w-5xl mx-auto space-y-6">
-        <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5">
-          <h1 className="text-2xl font-bold">Admin • Team Players</h1>
-          <p className="text-white/70">
-            Assign roster players to teams (independent of login).
-          </p>
-        </div>
+    <div className="p-6 text-white bg-[#0b1530] min-h-screen">
+      <h1 className="text-2xl font-bold mb-4">Admin • Team Players</h1>
+      {error && <div className="text-red-400">{error}</div>}
 
-        {error && <div className="text-red-400">{error}</div>}
+      <select value={selectedTeam} onChange={(e) => setSelectedTeam(e.target.value)}>
+        <option value="">Select team</option>
+        {teams.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name}
+          </option>
+        ))}
+      </select>
 
-        <select
-          className="w-full bg-[#0b1530] border border-[#1f2a60] p-3 rounded-xl"
-          value={selectedTeam}
-          onChange={(e) => setSelectedTeam(e.target.value)}
-        >
-          <option value="">Select a team</option>
-          {teams.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))}
-        </select>
-
-        {selectedTeam && (
-          <div className="grid md:grid-cols-2 gap-6">
-            <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5">
-              <h2 className="text-xl font-bold mb-3">
-                Team Players ({teamPlayers.length})
-              </h2>
-              {teamPlayers.map((p) => (
-                <div
-                  key={p.id}
-                  className="flex justify-between items-center bg-[#0b1530] border border-[#1f2a60] p-3 rounded-xl mb-2"
-                >
-                  <div>
-                    <div className="font-bold">{p.full_name}</div>
-                    <div className="text-white/60 text-sm">
-                      {(p.university || "—")} • {(p.position || "—")}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => removePlayer(p.id)}
-                    className="bg-red-600 hover:bg-red-500 px-3 py-1 rounded-xl font-bold"
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5">
-              <h2 className="text-xl font-bold mb-3">Available Players</h2>
-              {availablePlayers.map((p) => (
-                <div
-                  key={p.id}
-                  className="flex justify-between items-center bg-[#0b1530] border border-[#1f2a60] p-3 rounded-xl mb-2"
-                >
-                  <div>
-                    <div className="font-bold">{p.full_name}</div>
-                    <div className="text-white/60 text-sm">
-                      {(p.university || "—")} • {(p.position || "—")}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => addPlayer(p.id)}
-                    className="bg-green-600 hover:bg-green-500 px-3 py-1 rounded-xl font-bold"
-                  >
-                    Add
-                  </button>
-                </div>
-              ))}
-            </div>
+      {selectedTeam && (
+        <div className="grid grid-cols-2 gap-4 mt-4">
+          <div>
+            <h2>Team</h2>
+            {teamPlayers.map((p) => (
+              <div key={p.id}>
+                {p.display_name || p.full_name}
+                <button onClick={() => remove(p.id)}>Remove</button>
+              </div>
+            ))}
           </div>
-        )}
-      </div>
+
+          <div>
+            <h2>Available</h2>
+            {available.map((p) => (
+              <div key={p.id}>
+                {p.display_name || p.full_name}
+                <button onClick={() => add(p.id)}>Add</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

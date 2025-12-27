@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { adminAction } from "@/lib/adminApi";
 
 type Team = {
   id: string;
@@ -12,10 +13,12 @@ type Team = {
 
 export default function AdminTeamsPage() {
   const router = useRouter();
+
   const [loading, setLoading] = useState(true);
   const [teams, setTeams] = useState<Team[]>([]);
   const [newTeam, setNewTeam] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
   async function requireAdmin() {
     const { data: userData } = await supabase.auth.getUser();
@@ -24,11 +27,16 @@ export default function AdminTeamsPage() {
       return false;
     }
 
-    const { data: me } = await supabase
+    const { data: me, error: meErr } = await supabase
       .from("profiles")
       .select("role,status")
       .eq("id", userData.user.id)
       .single();
+
+    if (meErr) {
+      setError(meErr.message);
+      return false;
+    }
 
     if (me?.role !== "admin" || me?.status !== "active") {
       router.push("/app");
@@ -39,6 +47,7 @@ export default function AdminTeamsPage() {
   }
 
   async function loadTeams() {
+    setError("");
     const { data, error } = await supabase
       .from("teams")
       .select("id,name,created_at")
@@ -46,6 +55,7 @@ export default function AdminTeamsPage() {
 
     if (error) {
       setError(error.message);
+      setTeams([]);
       return;
     }
 
@@ -59,24 +69,29 @@ export default function AdminTeamsPage() {
     const name = newTeam.trim();
     if (!name) return;
 
-    const { error } = await supabase.from("teams").insert({ name });
-    if (error) {
-      setError(error.message);
-      return;
+    setBusy(true);
+    try {
+      await adminAction("createTeam", { name });
+      setNewTeam("");
+      await loadTeams();
+    } catch (e: any) {
+      setError(e.message || "Failed to create team");
+    } finally {
+      setBusy(false);
     }
-
-    setNewTeam("");
-    loadTeams();
   }
 
   async function deleteTeam(id: string) {
     setError("");
-    const { error } = await supabase.from("teams").delete().eq("id", id);
-    if (error) {
-      setError(error.message);
-      return;
+    setBusy(true);
+    try {
+      await adminAction("deleteTeam", { id });
+      await loadTeams();
+    } catch (e: any) {
+      setError(e.message || "Failed to delete team");
+    } finally {
+      setBusy(false);
     }
-    loadTeams();
   }
 
   useEffect(() => {
@@ -100,12 +115,9 @@ export default function AdminTeamsPage() {
   return (
     <div className="min-h-screen bg-[#0b1530] text-white p-6">
       <div className="max-w-3xl mx-auto space-y-4">
-
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5">
           <h1 className="text-2xl font-bold">Admin • Teams</h1>
-          <p className="text-white/70">
-            Create and manage tournament teams.
-          </p>
+          <p className="text-white/70">Create and manage tournament teams.</p>
         </div>
 
         <form
@@ -118,12 +130,15 @@ export default function AdminTeamsPage() {
             value={newTeam}
             onChange={(e) => setNewTeam(e.target.value)}
           />
-          <button className="px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 font-bold">
+          <button
+            disabled={busy}
+            className="px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-60 font-bold"
+          >
             Add
           </button>
         </form>
 
-        {error && <div className="text-red-400">{error}</div>}
+        {error && <div className="text-red-400 whitespace-pre-wrap">{error}</div>}
 
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5">
           <h2 className="text-xl font-bold mb-3">Teams</h2>
@@ -139,8 +154,9 @@ export default function AdminTeamsPage() {
                 >
                   <div className="font-bold">{team.name}</div>
                   <button
+                    disabled={busy}
                     onClick={() => deleteTeam(team.id)}
-                    className="px-3 py-2 rounded-xl bg-red-600 hover:bg-red-500 font-bold"
+                    className="px-3 py-2 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-60 font-bold"
                   >
                     Delete
                   </button>
@@ -150,11 +166,9 @@ export default function AdminTeamsPage() {
           )}
 
           <div className="text-white/60 text-sm mt-4">
-            Next step: assign players to teams at{" "}
-            <b>/admin/members</b>
+            Next step: assign players to teams at <b>/admin/team-players</b>
           </div>
         </div>
-
       </div>
     </div>
   );

@@ -3,10 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { adminAction } from "@/lib/adminApi";
 
 type Team = { id: string; name: string };
 type Group = { id: string; name: string };
-
 type TeamGroupRow = { team_id: string; group_id: string };
 
 export default function AdminGroupsPage() {
@@ -19,11 +19,12 @@ export default function AdminGroupsPage() {
   const [newGroupName, setNewGroupName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
 
   async function requireAdmin() {
     const { data } = await supabase.auth.getUser();
     if (!data.user) {
-      router.push("/register");
+      router.replace("/register");
       return false;
     }
 
@@ -34,7 +35,7 @@ export default function AdminGroupsPage() {
       .single();
 
     if (me?.role !== "admin" || me?.status !== "active") {
-      router.push("/app");
+      router.replace("/app");
       return false;
     }
     return true;
@@ -108,52 +109,47 @@ export default function AdminGroupsPage() {
       return;
     }
 
-    const { error } = await supabase.from("groups").insert({ name });
-    if (error) {
-      setError(error.message);
-      return;
+    setBusy(true);
+    try {
+      await adminAction("createGroup", { name });
+      setNewGroupName("");
+      await load();
+    } catch (e: any) {
+      setError(e?.message || "Failed to create group");
+    } finally {
+      setBusy(false);
     }
-
-    setNewGroupName("");
-    await load();
   }
 
-  async function deleteGroup(groupId: string) {
+  async function deleteGroup(id: string) {
     setError("");
-    const { error } = await supabase.from("groups").delete().eq("id", groupId);
-    if (error) {
-      setError(error.message);
-      return;
+    setBusy(true);
+    try {
+      await adminAction("deleteGroup", { id });
+      await load();
+    } catch (e: any) {
+      setError(e?.message || "Failed to delete group");
+    } finally {
+      setBusy(false);
     }
-    await load();
   }
 
   async function assignTeam(teamId: string, groupId: string | null) {
     setError("");
-
-    // remove assignment
-    if (!groupId) {
-      const { error } = await supabase.from("team_groups").delete().eq("team_id", teamId);
-      if (error) setError(error.message);
-      else await load();
-      return;
+    setBusy(true);
+    try {
+      await adminAction("assignTeamGroup", { teamId, groupId });
+      await load();
+    } catch (e: any) {
+      setError(e?.message || "Failed to assign team");
+    } finally {
+      setBusy(false);
     }
-
-    // upsert assignment (team_id is PK)
-    const { error } = await supabase
-      .from("team_groups")
-      .upsert({ team_id: teamId, group_id: groupId });
-
-    if (error) {
-      setError(error.message);
-      return;
-    }
-    await load();
   }
 
   async function logout() {
     await supabase.auth.signOut();
-    router.push("/register");
+    router.replace("/register");
   }
 
   if (loading) {
@@ -166,17 +162,18 @@ export default function AdminGroupsPage() {
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5 flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold">Admin • Groups</h1>
-            <p className="text-white/70">
-              Create groups (Group A/B/…) and assign teams to groups.
-            </p>
+            <p className="text-white/70">Create groups (Group A/B/…) and assign teams to groups.</p>
           </div>
+
           <div className="flex gap-2">
             <button
               onClick={load}
-              className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold"
+              disabled={busy}
+              className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 transition px-4 py-2 rounded-xl font-bold"
             >
               Refresh
             </button>
+
             <button
               onClick={logout}
               className="bg-red-600 hover:bg-red-500 transition px-4 py-2 rounded-xl font-bold"
@@ -186,7 +183,7 @@ export default function AdminGroupsPage() {
           </div>
         </div>
 
-        {error && <div className="text-red-400">{error}</div>}
+        {error && <div className="text-red-400 whitespace-pre-wrap">{error}</div>}
 
         {/* Create group */}
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5 space-y-3">
@@ -200,7 +197,8 @@ export default function AdminGroupsPage() {
             />
             <button
               onClick={createGroup}
-              className="bg-green-600 hover:bg-green-500 transition px-5 py-3 rounded-xl font-bold"
+              disabled={busy}
+              className="bg-green-600 hover:bg-green-500 disabled:opacity-60 transition px-5 py-3 rounded-xl font-bold"
             >
               Create
             </button>
@@ -222,7 +220,8 @@ export default function AdminGroupsPage() {
                   <div className="font-bold">{g.name}</div>
                   <button
                     onClick={() => deleteGroup(g.id)}
-                    className="bg-red-600 hover:bg-red-500 transition px-4 py-2 rounded-xl font-bold"
+                    disabled={busy}
+                    className="bg-red-600 hover:bg-red-500 disabled:opacity-60 transition px-4 py-2 rounded-xl font-bold"
                   >
                     Delete
                   </button>
@@ -258,6 +257,7 @@ export default function AdminGroupsPage() {
                     <select
                       className="rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
                       value={currentGroupId}
+                      disabled={busy}
                       onChange={(e) => assignTeam(t.id, e.target.value || null)}
                     >
                       <option value="">(No group)</option>

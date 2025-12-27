@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
+import { adminAction } from "@/lib/adminApi";
 
 type Team = { id: string; name: string };
+
 type MatchRow = {
   id: string;
   stage: "group" | "knockout";
@@ -16,7 +18,7 @@ type MatchRow = {
   away_score: number | null;
   status: "scheduled" | "finished";
   knockout_round: string | null;
-  knockout_order: number;
+  knockout_order: number | null;
   knockout_label: string | null;
 };
 
@@ -41,6 +43,8 @@ export default function AdminKnockoutPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const [busy, setBusy] = useState(false);
+
   // Create knockout match form
   const [round, setRound] = useState("QF");
   const [label, setLabel] = useState("");
@@ -61,11 +65,17 @@ export default function AdminKnockoutPage() {
       router.replace("/register");
       return false;
     }
-    const { data: me } = await supabase
+    const { data: me, error: meErr } = await supabase
       .from("profiles")
       .select("role,status")
       .eq("id", data.user.id)
       .single();
+
+    if (meErr) {
+      setError(meErr.message);
+      return false;
+    }
+
     if (me?.role !== "admin" || me?.status !== "active") {
       router.replace("/app");
       return false;
@@ -83,9 +93,7 @@ export default function AdminKnockoutPage() {
 
     const { data: m, error: mErr } = await supabase
       .from("matches")
-      .select(
-        "id,stage,home_team_id,away_team_id,start_time,home_score,away_score,status,knockout_round,knockout_order,knockout_label"
-      )
+      .select("id,stage,home_team_id,away_team_id,start_time,home_score,away_score,status,knockout_round,knockout_order,knockout_label")
       .eq("stage", "knockout")
       .order("knockout_round", { ascending: true })
       .order("knockout_order", { ascending: true })
@@ -119,45 +127,65 @@ export default function AdminKnockoutPage() {
 
     const start_time = startLocal ? new Date(startLocal).toISOString() : null;
     const knockout_order = Number(order);
-    const safeOrder = Number.isNaN(knockout_order) ? 0 : knockout_order;
+    const safeOrder = Number.isNaN(knockout_order) ? 1 : Math.max(1, knockout_order);
 
-    const { error } = await supabase.from("matches").insert({
-      stage: "knockout",
-      group_id: null,
-      home_team_id: homeId,
-      away_team_id: awayId,
-      start_time,
-      status: "scheduled",
-      home_score: null,
-      away_score: null,
-      knockout_round: round,
-      knockout_order: safeOrder,
-      knockout_label: label.trim() ? label.trim() : null,
-    });
+    setBusy(true);
+    try {
+      await adminAction("createMatch", {
+        match: {
+          stage: "knockout",
+          group_id: null,
+          home_team_id: homeId,
+          away_team_id: awayId,
+          start_time,
+          status: "scheduled",
+          home_score: 0,
+          away_score: 0,
+          knockout_round: round,
+          knockout_order: safeOrder,
+          knockout_label: label.trim() ? label.trim() : null,
+          motm_player_id: null,
+        },
+      });
 
-    if (error) return setError(error.message);
+      setLabel("");
+      setOrder("1");
+      setHomeId("");
+      setAwayId("");
+      setStartLocal("");
 
-    setLabel("");
-    setOrder("1");
-    setHomeId("");
-    setAwayId("");
-    setStartLocal("");
-
-    await load();
+      await load();
+    } catch (e: any) {
+      setError(e.message || "Failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function updateMeta(matchId: string, patch: Partial<MatchRow>) {
     setError("");
-    const { error } = await supabase.from("matches").update(patch).eq("id", matchId);
-    if (error) setError(error.message);
-    else await load();
+    setBusy(true);
+    try {
+      await adminAction("updateMatch", { id: matchId, patch });
+      await load();
+    } catch (e: any) {
+      setError(e.message || "Failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function deleteMatch(matchId: string) {
     setError("");
-    const { error } = await supabase.from("matches").delete().eq("id", matchId);
-    if (error) setError(error.message);
-    else await load();
+    setBusy(true);
+    try {
+      await adminAction("deleteMatch", { id: matchId });
+      await load();
+    } catch (e: any) {
+      setError(e.message || "Failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (loading) {
@@ -172,8 +200,9 @@ export default function AdminKnockoutPage() {
             ← Back to Admin
           </Link>
           <button
+            disabled={busy}
             onClick={load}
-            className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold"
+            className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 transition px-4 py-2 rounded-xl font-bold"
           >
             Refresh
           </button>
@@ -181,12 +210,10 @@ export default function AdminKnockoutPage() {
 
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5">
           <div className="text-2xl font-bold">Admin • Knockout Bracket</div>
-          <div className="text-white/70">
-            Create knockout matches and label them as R16 / QF / SF / Final.
-          </div>
+          <div className="text-white/70">Create knockout matches and label them as R16 / QF / SF / Final.</div>
         </div>
 
-        {error && <div className="text-red-400">{error}</div>}
+        {error && <div className="text-red-400 whitespace-pre-wrap">{error}</div>}
 
         {/* Create knockout match */}
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5 space-y-3">
@@ -196,6 +223,7 @@ export default function AdminKnockoutPage() {
             <div className="space-y-1">
               <div className="text-white/70 text-sm">Round</div>
               <select
+                disabled={busy}
                 className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
                 value={round}
                 onChange={(e) => setRound(e.target.value)}
@@ -211,6 +239,7 @@ export default function AdminKnockoutPage() {
             <div className="space-y-1">
               <div className="text-white/70 text-sm">Order (1,2,3…)</div>
               <input
+                disabled={busy}
                 value={order}
                 onChange={(e) => setOrder(e.target.value)}
                 className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
@@ -221,16 +250,18 @@ export default function AdminKnockoutPage() {
             <div className="space-y-1 md:col-span-2">
               <div className="text-white/70 text-sm">Label (optional)</div>
               <input
+                disabled={busy}
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
                 className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
-                placeholder='e.g. "Quarterfinal 1" or "SF • Match 1"'
+                placeholder='e.g. "Quarterfinal 1"'
               />
             </div>
 
             <div className="space-y-1">
               <div className="text-white/70 text-sm">Home team</div>
               <select
+                disabled={busy}
                 className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
                 value={homeId}
                 onChange={(e) => setHomeId(e.target.value)}
@@ -247,6 +278,7 @@ export default function AdminKnockoutPage() {
             <div className="space-y-1">
               <div className="text-white/70 text-sm">Away team</div>
               <select
+                disabled={busy}
                 className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
                 value={awayId}
                 onChange={(e) => setAwayId(e.target.value)}
@@ -263,6 +295,7 @@ export default function AdminKnockoutPage() {
             <div className="space-y-1 md:col-span-2">
               <div className="text-white/70 text-sm">Start time (optional)</div>
               <input
+                disabled={busy}
                 type="datetime-local"
                 value={startLocal}
                 onChange={(e) => setStartLocal(e.target.value)}
@@ -272,8 +305,9 @@ export default function AdminKnockoutPage() {
           </div>
 
           <button
+            disabled={busy}
             onClick={createKnockoutMatch}
-            className="bg-green-600 hover:bg-green-500 transition px-5 py-3 rounded-xl font-bold"
+            className="bg-green-600 hover:bg-green-500 disabled:opacity-60 transition px-5 py-3 rounded-xl font-bold"
           >
             Create Knockout Match
           </button>
@@ -303,13 +337,17 @@ export default function AdminKnockoutPage() {
                         <b>{m.home_score == null || m.away_score == null ? "—" : `${m.home_score}-${m.away_score}`}</b>
                       </div>
                       <div className="text-white/50 text-xs mt-1">
-                        Edit score/goals/MOTM from: <Link className="underline" href="/admin/matches">/admin/matches</Link>
+                        Edit score/goals/MOTM from:{" "}
+                        <Link className="underline" href="/admin/matches">
+                          /admin/matches
+                        </Link>
                       </div>
                     </div>
 
                     <button
+                      disabled={busy}
                       onClick={() => deleteMatch(m.id)}
-                      className="bg-red-600 hover:bg-red-500 transition px-4 py-2 rounded-xl font-bold"
+                      className="bg-red-600 hover:bg-red-500 disabled:opacity-60 transition px-4 py-2 rounded-xl font-bold"
                     >
                       Delete
                     </button>
@@ -318,6 +356,7 @@ export default function AdminKnockoutPage() {
                   {/* edit round / label / order */}
                   <div className="grid md:grid-cols-3 gap-2">
                     <select
+                      disabled={busy}
                       className="w-full rounded-xl bg-[#111c44] border border-white/10 p-3 outline-none"
                       value={m.knockout_round || ""}
                       onChange={(e) => updateMeta(m.id, { knockout_round: e.target.value || null })}
@@ -331,6 +370,7 @@ export default function AdminKnockoutPage() {
                     </select>
 
                     <input
+                      disabled={busy}
                       defaultValue={m.knockout_label || ""}
                       onBlur={(e) => updateMeta(m.id, { knockout_label: e.target.value.trim() || null })}
                       className="w-full rounded-xl bg-[#111c44] border border-white/10 p-3 outline-none"
@@ -338,10 +378,11 @@ export default function AdminKnockoutPage() {
                     />
 
                     <input
-                      defaultValue={m.knockout_order?.toString() ?? "0"}
+                      disabled={busy}
+                      defaultValue={m.knockout_order?.toString() ?? "1"}
                       onBlur={(e) => {
                         const v = Number(e.target.value);
-                        updateMeta(m.id, { knockout_order: Number.isNaN(v) ? 0 : v });
+                        updateMeta(m.id, { knockout_order: Number.isNaN(v) ? 1 : Math.max(1, v) });
                       }}
                       className="w-full rounded-xl bg-[#111c44] border border-white/10 p-3 outline-none"
                       placeholder="Order"

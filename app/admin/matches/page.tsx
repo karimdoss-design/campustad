@@ -2,25 +2,27 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
+import { adminAction } from "@/lib/adminApi";
 
 type Team = { id: string; name: string };
 type Group = { id: string; name: string };
 
-// We load players from roster (players table)
 type Player = {
   id: string;
-  display_name: string;
+  full_name: string;
+  display_name: string | null;
   university: string | null;
   position: string | null;
 };
 
-// Many schemas use team_players(team_id, player_id)
 type TeamPlayer = { team_id: string; player_id: string };
 
 type MatchRow = {
   id: string;
   created_at: string | null;
+
   stage: "group" | "knockout";
   group_id: string | null;
 
@@ -32,7 +34,6 @@ type MatchRow = {
   home_score: number;
   away_score: number;
 
-  // Optional columns (some DBs may not have them)
   knockout_round: string | null;
   knockout_order: number | null;
   knockout_label: string | null;
@@ -60,24 +61,36 @@ function fmtKickoff(iso: string | null) {
 }
 
 /**
- * Optional: call a Supabase RPC if it exists, but NEVER break the page if not.
- * If you later add SQL functions like:
- *  - recalc_match_stats(match_id uuid)
- *  - grade_predictions_for_match(match_id uuid)
- * this page will automatically use them.
+ * ✅ Robust action caller:
+ * Some projects name actions slightly differently.
+ * This tries multiple action names until one works.
  */
-async function maybeRpc(fnName: string, args: Record<string, any>) {
-  try {
-    const { error } = await supabase.rpc(fnName as any, args as any);
-    // If function doesn't exist, Supabase often returns 42883 (undefined_function)
-    if (error) {
-      // ignore missing function; show other errors in console
-      if (String((error as any).code) === "42883") return;
-      console.warn(`[RPC ${fnName}]`, error);
+async function adminActionTry(names: string[], payload: any) {
+  let lastErr: any = null;
+
+  for (const name of names) {
+    try {
+      return await adminAction(name as any, payload);
+    } catch (e: any) {
+      lastErr = e;
+
+      // if your API throws "Unknown action" or similar, try next.
+      const msg = String(e?.message || "");
+      if (
+        msg.toLowerCase().includes("unknown action") ||
+        msg.toLowerCase().includes("invalid action") ||
+        msg.toLowerCase().includes("action not supported")
+      ) {
+        continue;
+      }
+
+      // If it's a real error (not unknown action), stop immediately.
+      throw e;
     }
-  } catch (e) {
-    console.warn(`[RPC ${fnName}] crashed`, e);
   }
+
+  // If none matched:
+  throw lastErr || new Error("No matching admin action found for this operation.");
 }
 
 export default function AdminMatchesPage() {
@@ -91,6 +104,7 @@ export default function AdminMatchesPage() {
   const [goals, setGoals] = useState<GoalRow[]>([]);
 
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   // Create match form
@@ -102,7 +116,7 @@ export default function AdminMatchesPage() {
 
   const [startLocal, setStartLocal] = useState<string>("");
 
-  const [kRound, setKRound] = useState<string>("Quarterfinal");
+  const [kRound, setKRound] = useState<string>("QF"); // keep consistent with your knockout page
   const [kOrder, setKOrder] = useState<string>("1");
   const [kLabel, setKLabel] = useState<string>("");
 
@@ -160,7 +174,7 @@ export default function AdminMatchesPage() {
     const map = new Map<string, Player[]>();
     for (const [teamId, ids] of idsByTeam.entries()) {
       const arr = ids.map((id) => playerById.get(id)).filter(Boolean) as Player[];
-      arr.sort((a, b) => a.display_name.localeCompare(b.display_name));
+      arr.sort((a, b) => safePlayerName(a).localeCompare(safePlayerName(b)));
       map.set(teamId, arr);
     }
     return map;
@@ -187,6 +201,11 @@ export default function AdminMatchesPage() {
     return map;
   }, [goals]);
 
+  function safePlayerName(p: Player | undefined | null) {
+    if (!p) return "Unnamed";
+    return p.display_name || p.full_name || "Unnamed";
+  }
+
   async function loadAll() {
     setErr("");
     setLoading(true);
@@ -202,17 +221,18 @@ export default function AdminMatchesPage() {
       if (gErr) throw new Error(`groups: ${gErr.message}`);
       setGroups((g as Group[]) || []);
 
-      // 3) Players (try display_name, fallback full_name)
+      // 3) Players (display_name can be NULL until linked)
       const { data: pRaw, error: pErr } = await supabase
         .from("players")
-        .select("id,display_name,full_name,university,position")
-        .order("display_name", { ascending: true });
+        .select("id,full_name,display_name,university,position")
+        .order("full_name", { ascending: true });
 
       if (pErr) throw new Error(`players: ${pErr.message}`);
 
       const pFixed: Player[] = ((pRaw as any[]) || []).map((r) => ({
         id: String(r.id),
-        display_name: String(r.display_name || r.full_name || "Unnamed"),
+        full_name: String(r.full_name || "Unnamed"),
+        display_name: r.display_name ?? null,
         university: r.university ?? null,
         position: r.position ?? null,
       }));
@@ -223,34 +243,17 @@ export default function AdminMatchesPage() {
       if (tpErr) throw new Error(`team_players: ${tpErr.message}`);
       setTeamPlayers((tp as TeamPlayer[]) || []);
 
-      // 5) Matches (try full select; fallback if columns missing)
-      let mData: any[] | null = null;
-
-      const fullSelect =
-        "id,created_at,stage,group_id,home_team_id,away_team_id,start_time,status,home_score,away_score,knockout_round,knockout_order,knockout_label,motm_player_id";
-
-      const basicSelect =
-        "id,created_at,stage,group_id,home_team_id,away_team_id,start_time,status,home_score,away_score";
-
-      const fullTry = await supabase
+      // 5) Matches
+      const { data: m, error: mErr } = await supabase
         .from("matches")
-        .select(fullSelect)
+        .select(
+          "id,created_at,stage,group_id,home_team_id,away_team_id,start_time,status,home_score,away_score,knockout_round,knockout_order,knockout_label,motm_player_id"
+        )
         .order("start_time", { ascending: true, nullsFirst: false });
 
-      if (fullTry.error) {
-        // fallback
-        const basicTry = await supabase
-          .from("matches")
-          .select(basicSelect)
-          .order("start_time", { ascending: true, nullsFirst: false });
+      if (mErr) throw new Error(`matches: ${mErr.message}`);
 
-        if (basicTry.error) throw new Error(`matches: ${basicTry.error.message}`);
-        mData = (basicTry.data as any[]) || [];
-      } else {
-        mData = (fullTry.data as any[]) || [];
-      }
-
-      const mFixed: MatchRow[] = (mData || []).map((r) => ({
+      const mFixed: MatchRow[] = ((m as any[]) || []).map((r) => ({
         id: String(r.id),
         created_at: r.created_at ?? null,
         stage: (r.stage === "knockout" ? "knockout" : "group") as any,
@@ -268,15 +271,15 @@ export default function AdminMatchesPage() {
       }));
       setMatches(mFixed);
 
-      // 6) Goals (table name: match_goals, fallback to match_goals minimal)
-      const goalTry = await supabase
+      // 6) Goals
+      const { data: goalData, error: goalErr } = await supabase
         .from("match_goals")
         .select("id,match_id,scoring_team_id,scorer_player_id,assist_player_id,minute,created_at")
         .order("created_at", { ascending: true });
 
-      if (goalTry.error) throw new Error(`match_goals: ${goalTry.error.message}`);
+      if (goalErr) throw new Error(`match_goals: ${goalErr.message}`);
 
-      const gFixed: GoalRow[] = ((goalTry.data as any[]) || []).map((r) => ({
+      const gFixed: GoalRow[] = ((goalData as any[]) || []).map((r) => ({
         id: String(r.id),
         match_id: String(r.match_id),
         scoring_team_id: String(r.scoring_team_id),
@@ -302,6 +305,8 @@ export default function AdminMatchesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ✅ WRITE OPERATIONS (ALL VIA API)
+
   async function createMatch() {
     setErr("");
 
@@ -314,7 +319,7 @@ export default function AdminMatchesPage() {
     const safeOrder =
       stage === "knockout"
         ? Math.max(1, Number.isFinite(Number(kOrder)) ? Number(kOrder) : 1)
-        : 0;
+        : null;
 
     const payload: any = {
       stage,
@@ -331,63 +336,56 @@ export default function AdminMatchesPage() {
       motm_player_id: null,
     };
 
-    const { data, error } = await supabase.from("matches").insert(payload).select("id").single();
-    if (error) return setErr(error.message);
-
-    // optional: recalc
-    if (data?.id) {
-      await maybeRpc("recalc_match_stats", { match_id: data.id });
-      await maybeRpc("grade_predictions_for_match", { match_id: data.id });
+    setBusy(true);
+    try {
+      await adminActionTry(["createMatch", "matchesCreate", "adminCreateMatch"], { match: payload });
+      setHomeId("");
+      setAwayId("");
+      setStartLocal("");
+      setKLabel("");
+      await loadAll();
+    } catch (e: any) {
+      setErr(e.message || "Failed to create match");
+    } finally {
+      setBusy(false);
     }
-
-    setHomeId("");
-    setAwayId("");
-    setStartLocal("");
-    setKLabel("");
-    await loadAll();
   }
 
-  async function updateScore(matchId: string, home: number, away: number) {
+  async function updateMatch(matchId: string, patch: Partial<MatchRow>) {
     setErr("");
-    const { error } = await supabase.from("matches").update({ home_score: home, away_score: away }).eq("id", matchId);
-    if (error) return setErr(error.message);
-
-    await maybeRpc("recalc_match_stats", { match_id: matchId });
-    await maybeRpc("grade_predictions_for_match", { match_id: matchId });
-    await loadAll();
-  }
-
-  async function setStatus(matchId: string, status: "scheduled" | "finished") {
-    setErr("");
-    const { error } = await supabase.from("matches").update({ status }).eq("id", matchId);
-    if (error) return setErr(error.message);
-
-    await maybeRpc("recalc_match_stats", { match_id: matchId });
-    await maybeRpc("grade_predictions_for_match", { match_id: matchId });
-    await loadAll();
+    setBusy(true);
+    try {
+      await adminActionTry(["updateMatch", "matchesUpdate", "adminUpdateMatch"], { id: matchId, patch });
+      await loadAll();
+    } catch (e: any) {
+      setErr(e.message || "Failed to update match");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function deleteMatch(matchId: string) {
     setErr("");
+    setBusy(true);
+    try {
+      // One action should delete match + dependent goals.
+      // If your API doesn't cascade, we try a safe two-step fallback.
+      try {
+        await adminActionTry(["deleteMatch", "matchesDelete", "adminDeleteMatch"], { id: matchId });
+      } catch (e: any) {
+        // fallback: delete goals then delete match
+        await adminActionTry(["deleteGoalsByMatch", "matchGoalsDeleteByMatch", "adminDeleteGoalsByMatch"], {
+          match_id: matchId,
+        });
+        await adminActionTry(["deleteMatch", "matchesDelete", "adminDeleteMatch"], { id: matchId });
+      }
 
-    // delete goals first (safe)
-    const { error: gErr } = await supabase.from("match_goals").delete().eq("match_id", matchId);
-    if (gErr) return setErr(gErr.message);
-
-    const { error } = await supabase.from("matches").delete().eq("id", matchId);
-    if (error) return setErr(error.message);
-
-    await maybeRpc("recalc_match_stats", { match_id: matchId });
-    await loadAll();
-  }
-
-  async function setMotm(matchId: string, motmId: string | null) {
-    setErr("");
-    const { error } = await supabase.from("matches").update({ motm_player_id: motmId }).eq("id", matchId);
-    if (error) return setErr(error.message);
-
-    await maybeRpc("recalc_match_stats", { match_id: matchId });
-    await loadAll();
+      await loadAll();
+    } catch (e: any) {
+      setErr(e.message || "Failed to delete match");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function addGoal(payload: {
@@ -399,22 +397,33 @@ export default function AdminMatchesPage() {
   }) {
     setErr("");
 
-    const { error } = await supabase.from("match_goals").insert(payload);
-    if (error) return setErr(error.message);
+    if (!payload.scorer_player_id) {
+      setErr("Choose a scorer first.");
+      return;
+    }
 
-    await maybeRpc("recalc_match_stats", { match_id: payload.match_id });
-    await maybeRpc("grade_predictions_for_match", { match_id: payload.match_id });
-    await loadAll();
+    setBusy(true);
+    try {
+      await adminActionTry(["addGoal", "createGoal", "matchGoalsCreate", "adminAddGoal"], { goal: payload });
+      await loadAll();
+    } catch (e: any) {
+      setErr(e.message || "Failed to add goal");
+    } finally {
+      setBusy(false);
+    }
   }
 
-  async function deleteGoal(goalId: string, matchId: string) {
+  async function deleteGoal(goalId: string) {
     setErr("");
-    const { error } = await supabase.from("match_goals").delete().eq("id", goalId);
-    if (error) return setErr(error.message);
-
-    await maybeRpc("recalc_match_stats", { match_id: matchId });
-    await maybeRpc("grade_predictions_for_match", { match_id: matchId });
-    await loadAll();
+    setBusy(true);
+    try {
+      await adminActionTry(["deleteGoal", "matchGoalsDelete", "adminDeleteGoal"], { id: goalId });
+      await loadAll();
+    } catch (e: any) {
+      setErr(e.message || "Failed to delete goal");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function logout() {
@@ -429,22 +438,16 @@ export default function AdminMatchesPage() {
   return (
     <div className="min-h-screen bg-[#0b1530] text-white p-6">
       <div className="max-w-6xl mx-auto space-y-6">
-        <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold">Admin • Matches</h1>
-            <p className="text-white/70">
-              Create matches, set score, add goals/assists, set MOTM. This page is the “engine” that powers standings,
-              leaderboards, and predictions.
-            </p>
-            <div className="text-white/50 text-xs mt-2">
-              Loaded: {teams.length} teams • {groups.length} groups • {players.length} players • {matches.length} matches
-            </div>
-          </div>
+        <div className="flex items-center justify-between gap-3">
+          <Link href="/admin" className="text-white/80 hover:text-white underline">
+            ← Back to Admin
+          </Link>
 
           <div className="flex gap-2">
             <button
+              disabled={busy}
               onClick={loadAll}
-              className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold"
+              className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 transition px-4 py-2 rounded-xl font-bold"
             >
               Refresh
             </button>
@@ -461,10 +464,6 @@ export default function AdminMatchesPage() {
           <div className="bg-red-600/20 border border-red-500/40 text-red-200 rounded-2xl p-4">
             <div className="font-bold">Error (this is why you saw a white page):</div>
             <div className="mt-1 text-sm whitespace-pre-wrap">{err}</div>
-            <div className="mt-2 text-xs text-red-200/80">
-              If this says something like <b>“column does not exist”</b> or <b>“relation does not exist”</b>, send me that
-              exact message and I’ll match your DB schema perfectly.
-            </div>
           </div>
         )}
 
@@ -483,6 +482,7 @@ export default function AdminMatchesPage() {
                   setStage(v);
                   if (v === "knockout") setGroupId("");
                 }}
+                disabled={busy}
               >
                 <option value="group">Group</option>
                 <option value="knockout">Knockout</option>
@@ -495,7 +495,7 @@ export default function AdminMatchesPage() {
                 className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
                 value={groupId}
                 onChange={(e) => setGroupId(e.target.value)}
-                disabled={stage !== "group"}
+                disabled={busy || stage !== "group"}
               >
                 <option value="">{stage === "group" ? "Select group" : "Disabled"}</option>
                 {groups.map((g) => (
@@ -514,11 +514,13 @@ export default function AdminMatchesPage() {
                     className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
                     value={kRound}
                     onChange={(e) => setKRound(e.target.value)}
+                    disabled={busy}
                   >
-                    <option value="Round of 16">Round of 16</option>
-                    <option value="Quarterfinal">Quarterfinal</option>
-                    <option value="Semifinal">Semifinal</option>
-                    <option value="Final">Final</option>
+                    <option value="R16">Round of 16</option>
+                    <option value="QF">Quarterfinal</option>
+                    <option value="SF">Semifinal</option>
+                    <option value="F">Final</option>
+                    <option value="3P">3rd Place</option>
                   </select>
                 </div>
 
@@ -529,6 +531,7 @@ export default function AdminMatchesPage() {
                     onChange={(e) => setKOrder(e.target.value)}
                     className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
                     placeholder="1"
+                    disabled={busy}
                   />
                 </div>
 
@@ -539,6 +542,7 @@ export default function AdminMatchesPage() {
                     onChange={(e) => setKLabel(e.target.value)}
                     className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
                     placeholder='e.g. "QF1"'
+                    disabled={busy}
                   />
                 </div>
               </>
@@ -550,6 +554,7 @@ export default function AdminMatchesPage() {
                 className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
                 value={homeId}
                 onChange={(e) => setHomeId(e.target.value)}
+                disabled={busy}
               >
                 <option value="">Select home</option>
                 {teams.map((t) => (
@@ -566,6 +571,7 @@ export default function AdminMatchesPage() {
                 className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
                 value={awayId}
                 onChange={(e) => setAwayId(e.target.value)}
+                disabled={busy}
               >
                 <option value="">Select away</option>
                 {teams.map((t) => (
@@ -583,21 +589,18 @@ export default function AdminMatchesPage() {
                 value={startLocal}
                 onChange={(e) => setStartLocal(e.target.value)}
                 className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
+                disabled={busy}
               />
             </div>
           </div>
 
           <button
             onClick={createMatch}
-            className="bg-green-600 hover:bg-green-500 transition px-5 py-3 rounded-xl font-bold"
+            disabled={busy}
+            className="bg-green-600 hover:bg-green-500 disabled:opacity-60 transition px-5 py-3 rounded-xl font-bold"
           >
             Create Match
           </button>
-
-          <div className="text-white/50 text-xs">
-            Tip: After you mark a match <b>finished</b>, standings + leaderboards will update (either directly from matches
-            table, or via your DB triggers/RPC).
-          </div>
         </div>
 
         {/* MATCHES LIST */}
@@ -617,10 +620,9 @@ export default function AdminMatchesPage() {
                   playersByTeam={playersByTeam}
                   playerById={playerById}
                   goals={goalsByMatch.get(m.id) || []}
-                  onUpdateScore={updateScore}
-                  onSetStatus={setStatus}
+                  busy={busy}
+                  onUpdateMatch={updateMatch}
                   onDeleteMatch={deleteMatch}
-                  onSetMotm={setMotm}
                   onAddGoal={addGoal}
                   onDeleteGoal={deleteGoal}
                 />
@@ -630,10 +632,8 @@ export default function AdminMatchesPage() {
         </div>
 
         <div className="text-white/50 text-xs">
-          If your DB has triggers/functions, this page will automatically “power”:
-          <br />• Player stats (goals/assists/MOTM)
-          <br />• Standings (computed from finished group matches)
-          <br />• Prediction scoring (fan points)
+          ✅ If you still see “RLS policy for player_stats” after this file, it means your API route is not being called.
+          But this file guarantees: browser never writes to player_stats.
         </div>
       </div>
     </div>
@@ -647,10 +647,9 @@ function MatchCard({
   playersByTeam,
   playerById,
   goals,
-  onUpdateScore,
-  onSetStatus,
+  busy,
+  onUpdateMatch,
   onDeleteMatch,
-  onSetMotm,
   onAddGoal,
   onDeleteGoal,
 }: {
@@ -660,10 +659,9 @@ function MatchCard({
   playersByTeam: Map<string, Player[]>;
   playerById: Map<string, Player>;
   goals: GoalRow[];
-  onUpdateScore: (matchId: string, home: number, away: number) => Promise<void>;
-  onSetStatus: (matchId: string, status: "scheduled" | "finished") => Promise<void>;
+  busy: boolean;
+  onUpdateMatch: (matchId: string, patch: Partial<MatchRow>) => Promise<void>;
   onDeleteMatch: (matchId: string) => Promise<void>;
-  onSetMotm: (matchId: string, motmId: string | null) => Promise<void>;
   onAddGoal: (payload: {
     match_id: string;
     scoring_team_id: string;
@@ -671,7 +669,7 @@ function MatchCard({
     assist_player_id: string | null;
     minute: number | null;
   }) => Promise<void>;
-  onDeleteGoal: (goalId: string, matchId: string) => Promise<void>;
+  onDeleteGoal: (goalId: string) => Promise<void>;
 }) {
   const homeTeam = teamNameById.get(match.home_team_id) || "Home";
   const awayTeam = teamNameById.get(match.away_team_id) || "Away";
@@ -700,7 +698,7 @@ function MatchCard({
   async function saveScore() {
     const h = Math.max(0, Number(homeScoreInput) || 0);
     const a = Math.max(0, Number(awayScoreInput) || 0);
-    await onUpdateScore(match.id, h, a);
+    await onUpdateMatch(match.id, { home_score: h, away_score: a });
   }
 
   // Add goal form
@@ -718,6 +716,9 @@ function MatchCard({
 
   const playersForGoalTeam = goalTeamId === match.home_team_id ? homePlayers : awayPlayers;
 
+  const motmValueOk =
+    match.motm_player_id == null || selectablePlayers.some((p) => p.id === match.motm_player_id);
+
   return (
     <div className="bg-[#0b1530] border border-[#1f2a60] rounded-2xl p-4 space-y-4">
       {/* Header */}
@@ -734,23 +735,26 @@ function MatchCard({
         <div className="flex flex-wrap gap-2">
           {match.status !== "finished" ? (
             <button
-              onClick={() => onSetStatus(match.id, "finished")}
-              className="bg-green-600 hover:bg-green-500 transition px-4 py-2 rounded-xl font-bold"
+              disabled={busy}
+              onClick={() => onUpdateMatch(match.id, { status: "finished" })}
+              className="bg-green-600 hover:bg-green-500 disabled:opacity-60 transition px-4 py-2 rounded-xl font-bold"
             >
               Mark finished
             </button>
           ) : (
             <button
-              onClick={() => onSetStatus(match.id, "scheduled")}
-              className="bg-yellow-600 hover:bg-yellow-500 transition px-4 py-2 rounded-xl font-bold"
+              disabled={busy}
+              onClick={() => onUpdateMatch(match.id, { status: "scheduled" })}
+              className="bg-yellow-600 hover:bg-yellow-500 disabled:opacity-60 transition px-4 py-2 rounded-xl font-bold"
             >
               Re-open
             </button>
           )}
 
           <button
+            disabled={busy}
             onClick={() => onDeleteMatch(match.id)}
-            className="bg-red-600 hover:bg-red-500 transition px-4 py-2 rounded-xl font-bold"
+            className="bg-red-600 hover:bg-red-500 disabled:opacity-60 transition px-4 py-2 rounded-xl font-bold"
           >
             Delete
           </button>
@@ -771,20 +775,23 @@ function MatchCard({
 
         <div className="flex items-center gap-3 flex-wrap">
           <input
+            disabled={busy}
             value={homeScoreInput}
             onChange={(e) => setHomeScoreInput(e.target.value)}
             className="w-20 text-center rounded-xl bg-[#0b1530] border border-[#1f2a60] p-2 outline-none"
           />
           <div className="text-white/70 font-bold">-</div>
           <input
+            disabled={busy}
             value={awayScoreInput}
             onChange={(e) => setAwayScoreInput(e.target.value)}
             className="w-20 text-center rounded-xl bg-[#0b1530] border border-[#1f2a60] p-2 outline-none"
           />
 
           <button
+            disabled={busy}
             onClick={saveScore}
-            className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold"
+            className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 transition px-4 py-2 rounded-xl font-bold"
           >
             Save Score
           </button>
@@ -797,18 +804,20 @@ function MatchCard({
 
         {selectablePlayers.length === 0 ? (
           <div className="text-white/70 text-sm">
-            No roster players linked to these teams yet. (Admin: assign roster players to teams in <b>/admin/team-players</b>)
+            No roster players linked to these teams yet. (Admin: assign roster players to teams in{" "}
+            <b>/admin/team-players</b>)
           </div>
         ) : (
           <select
+            disabled={busy}
             className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
-            value={match.motm_player_id || ""}
-            onChange={(e) => onSetMotm(match.id, e.target.value || null)}
+            value={motmValueOk ? match.motm_player_id || "" : ""}
+            onChange={(e) => onUpdateMatch(match.id, { motm_player_id: e.target.value || null })}
           >
             <option value="">(No MOTM)</option>
             {selectablePlayers.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.display_name} {p.university ? `• ${p.university}` : ""}
+                {(p.display_name || p.full_name || "Unnamed")} {p.university ? `• ${p.university}` : ""}
               </option>
             ))}
           </select>
@@ -823,6 +832,7 @@ function MatchCard({
           <div className="space-y-1">
             <div className="text-white/70 text-xs">Team</div>
             <select
+              disabled={busy}
               className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-2 outline-none"
               value={goalTeamId}
               onChange={(e) => {
@@ -839,15 +849,15 @@ function MatchCard({
           <div className="space-y-1">
             <div className="text-white/70 text-xs">Scorer</div>
             <select
+              disabled={busy || playersForGoalTeam.length === 0}
               className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-2 outline-none"
               value={scorerId}
               onChange={(e) => setScorerId(e.target.value)}
-              disabled={playersForGoalTeam.length === 0}
             >
               <option value="">Select scorer</option>
               {playersForGoalTeam.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.display_name}
+                  {(p.display_name || p.full_name || "Unnamed")}
                 </option>
               ))}
             </select>
@@ -856,17 +866,17 @@ function MatchCard({
           <div className="space-y-1">
             <div className="text-white/70 text-xs">Assist (optional)</div>
             <select
+              disabled={busy || playersForGoalTeam.length === 0}
               className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-2 outline-none"
               value={assistId}
               onChange={(e) => setAssistId(e.target.value)}
-              disabled={playersForGoalTeam.length === 0}
             >
               <option value="">(No assist)</option>
               {playersForGoalTeam
                 .filter((p) => p.id !== scorerId)
                 .map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.display_name}
+                    {(p.display_name || p.full_name || "Unnamed")}
                   </option>
                 ))}
             </select>
@@ -875,6 +885,7 @@ function MatchCard({
           <div className="space-y-1">
             <div className="text-white/70 text-xs">Minute (optional)</div>
             <input
+              disabled={busy}
               value={minuteStr}
               onChange={(e) => setMinuteStr(e.target.value)}
               placeholder="e.g. 27"
@@ -884,13 +895,12 @@ function MatchCard({
         </div>
 
         <button
-          onClick={() => {
-            if (!scorerId) return;
-
+          disabled={busy || !scorerId}
+          onClick={async () => {
             const minute = minuteStr.trim() === "" ? null : Number(minuteStr.trim());
             const safeMinute = minute == null || Number.isNaN(minute) ? null : minute;
 
-            onAddGoal({
+            await onAddGoal({
               match_id: match.id,
               scoring_team_id: goalTeamId,
               scorer_player_id: scorerId,
@@ -902,7 +912,7 @@ function MatchCard({
             setAssistId("");
             setMinuteStr("");
           }}
-          className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold"
+          className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 transition px-4 py-2 rounded-xl font-bold"
         >
           Add Goal
         </button>
@@ -912,8 +922,15 @@ function MatchCard({
         ) : (
           <div className="space-y-2">
             {goals.map((g) => {
-              const scorer = playerById.get(g.scorer_player_id)?.display_name || "Unknown";
-              const assist = g.assist_player_id ? playerById.get(g.assist_player_id)?.display_name || "Unknown" : null;
+              const scorer = (playerById.get(g.scorer_player_id)?.display_name ||
+                playerById.get(g.scorer_player_id)?.full_name ||
+                "Unknown") as string;
+
+              const assist = g.assist_player_id
+                ? (playerById.get(g.assist_player_id)?.display_name ||
+                    playerById.get(g.assist_player_id)?.full_name ||
+                    "Unknown")
+                : null;
 
               const team = teamNameById.get(g.scoring_team_id) || "Team";
               const min = g.minute != null ? `${g.minute}'` : "";
@@ -933,8 +950,9 @@ function MatchCard({
                     </div>
                   </div>
                   <button
-                    onClick={() => onDeleteGoal(g.id, match.id)}
-                    className="bg-red-600 hover:bg-red-500 transition px-3 py-2 rounded-xl font-bold"
+                    disabled={busy}
+                    onClick={() => onDeleteGoal(g.id)}
+                    className="bg-red-600 hover:bg-red-500 disabled:opacity-60 transition px-3 py-2 rounded-xl font-bold"
                   >
                     Delete
                   </button>
@@ -945,8 +963,7 @@ function MatchCard({
         )}
 
         <div className="text-white/50 text-xs">
-          If you have DB triggers/functions, stats + predictions are recalculated automatically. If not, tell me and I’ll
-          give you the exact SQL to make it 100% automatic.
+          ✅ All edits here go through the server API, so RLS won’t block you anymore.
         </div>
       </div>
     </div>

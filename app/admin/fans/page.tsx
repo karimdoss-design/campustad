@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { adminAction } from "@/lib/adminApi";
 
 type Profile = {
   id: string;
@@ -18,6 +19,7 @@ export default function AdminFansPage() {
   const router = useRouter();
   const [rows, setRows] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
 
@@ -27,13 +29,7 @@ export default function AdminFansPage() {
       router.replace("/register");
       return false;
     }
-
-    const { data: me } = await supabase
-      .from("profiles")
-      .select("role,status")
-      .eq("id", data.user.id)
-      .single();
-
+    const { data: me } = await supabase.from("profiles").select("role,status").eq("id", data.user.id).single();
     if (me?.role !== "admin" || me?.status !== "active") {
       router.replace("/app");
       return false;
@@ -78,17 +74,18 @@ export default function AdminFansPage() {
 
   async function setStatus(id: string, status: Profile["status"]) {
     setErr("");
-    const { error } = await supabase.from("profiles").update({ status }).eq("id", id);
-    if (error) {
-      setErr(error.message);
-      return;
+    setBusyId(id);
+    try {
+      await adminAction("setProfileStatus", { id, status });
+      await load();
+    } catch (e: any) {
+      setErr(e.message || "Failed");
+    } finally {
+      setBusyId(null);
     }
-    await load();
   }
 
-  if (loading) {
-    return <div className="min-h-screen bg-[#0b1530] text-white p-8">Loading…</div>;
-  }
+  if (loading) return <div className="min-h-screen bg-[#0b1530] text-white p-8">Loading…</div>;
 
   return (
     <div className="min-h-screen bg-[#0b1530] text-white p-6">
@@ -96,20 +93,14 @@ export default function AdminFansPage() {
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5 flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold">Admin • Fans</h1>
-            <p className="text-white/70">
-              Deactivate a fan to kick them out immediately and block access.
-            </p>
+            <p className="text-white/70">Deactivate a fan to kick them out immediately and block access.</p>
           </div>
-
-          <button
-            onClick={load}
-            className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold"
-          >
+          <button onClick={load} className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold">
             Refresh
           </button>
         </div>
 
-        {err && <div className="text-red-400">{err}</div>}
+        {err && <div className="text-red-400 whitespace-pre-wrap">{err}</div>}
 
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-4 flex flex-wrap gap-3 items-center justify-between">
           <input
@@ -143,17 +134,19 @@ export default function AdminFansPage() {
                 <div className="flex flex-wrap gap-2">
                   {f.status !== "disabled" ? (
                     <button
+                      disabled={busyId === f.id}
                       onClick={() => setStatus(f.id, "disabled")}
-                      className="bg-red-600 hover:bg-red-500 transition px-4 py-2 rounded-xl font-bold"
+                      className="bg-red-600 hover:bg-red-500 disabled:opacity-60 transition px-4 py-2 rounded-xl font-bold"
                     >
-                      Kick (Disable)
+                      {busyId === f.id ? "..." : "Kick (Disable)"}
                     </button>
                   ) : (
                     <button
+                      disabled={busyId === f.id}
                       onClick={() => setStatus(f.id, "active")}
-                      className="bg-green-600 hover:bg-green-500 transition px-4 py-2 rounded-xl font-bold"
+                      className="bg-green-600 hover:bg-green-500 disabled:opacity-60 transition px-4 py-2 rounded-xl font-bold"
                     >
-                      Reactivate
+                      {busyId === f.id ? "..." : "Reactivate"}
                     </button>
                   )}
                 </div>
