@@ -58,7 +58,7 @@ export default function AdminHomePage() {
       title: "Registrations",
       items: [
         {
-          href: "/admin",
+          href: "/admin/approve-players",
           name: "Approve Players",
           desc: "Approve / reject pending player signups",
         },
@@ -88,45 +88,27 @@ export default function AdminHomePage() {
       title: "Tournament Setup",
       items: [
         { href: "/admin/teams", name: "Teams", desc: "Create / delete teams" },
-        {
-          href: "/admin/groups",
-          name: "Groups",
-          desc: "Create groups and assign teams",
-        },
+        { href: "/admin/groups", name: "Groups", desc: "Create groups and assign teams" },
       ],
     },
     {
       title: "Matches & Knockout",
       items: [
-        {
-          href: "/admin/matches",
-          name: "Matches",
-          desc: "Create matches, scores, goals, MOTM",
-        },
-        {
-          href: "/admin/knockout",
-          name: "Knockout Bracket",
-          desc: "Set knockout rounds + bracket matches",
-        },
+        { href: "/admin/matches", name: "Matches", desc: "Create matches, scores, goals, MOTM" },
+        { href: "/admin/knockout", name: "Knockout Bracket", desc: "Set knockout rounds + bracket matches" },
       ],
     },
     {
       title: "Engagement",
       items: [
-        {
-          href: "/admin/news",
-          name: "News",
-          desc: "Post text, images, and videos for all users",
-        },
+        { href: "/admin/news", name: "News", desc: "Post text, images, and videos for all users" },
         { href: "/admin/fans", name: "Fans", desc: "Kick / reactivate fans" },
       ],
     },
   ];
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-[#0b1530] text-white p-8">Loading…</div>
-    );
+    return <div className="min-h-screen bg-[#0b1530] text-white p-8">Loading…</div>;
   }
 
   return (
@@ -135,9 +117,7 @@ export default function AdminHomePage() {
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5 flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold">Admin Panel</h1>
-            <p className="text-white/70">
-              Manage Campustad (teams, players, matches, fans).
-            </p>
+            <p className="text-white/70">Manage Campustad (teams, players, matches, fans).</p>
           </div>
           <button
             onClick={logout}
@@ -151,10 +131,7 @@ export default function AdminHomePage() {
 
         <div className="grid md:grid-cols-2 gap-4">
           {sections.map((s) => (
-            <div
-              key={s.title}
-              className="bg-[#111c44] border border-white/10 rounded-2xl p-5"
-            >
+            <div key={s.title} className="bg-[#111c44] border border-white/10 rounded-2xl p-5">
               <div className="text-xl font-bold mb-3">{s.title}</div>
 
               <div className="space-y-2">
@@ -174,8 +151,7 @@ export default function AdminHomePage() {
         </div>
 
         <div className="text-white/50 text-xs">
-          Tip: “Kick (Disable)” blocks access immediately (recommended instead of
-          deleting).
+          Tip: “Disable” blocks access immediately (recommended instead of deleting).
         </div>
       </div>
     </div>
