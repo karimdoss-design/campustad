@@ -51,11 +51,7 @@ function safeName(x: any) {
 function statsFrom(pl: any): PlayerStats | null {
   const raw = pl?.player_stats;
   if (!raw) return null;
-
-  // Supabase sometimes returns embedded relations as array
   if (Array.isArray(raw)) return raw[0] ?? null;
-
-  // Or as object
   return raw as PlayerStats;
 }
 
@@ -67,16 +63,17 @@ export default function HomePage() {
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
+  const [loggingOut, setLoggingOut] = useState(false);
 
-  // ✅ PWA-safe logout (fixes blank/white screen issues)
-  async function doLogout() {
+  async function logout() {
+    // ✅ EXACT SAME AS ADMIN: signOut then go to /register
     try {
+      setLoggingOut(true);
       await supabase.auth.signOut();
     } catch (e) {
-      // even if signout fails, still go to register
+      // ignore errors; still redirect
     } finally {
-      // ✅ This is the most reliable for iPhone "Add to Home Screen"
-      window.location.href = "/register";
+      router.replace("/register");
     }
   }
 
@@ -86,7 +83,6 @@ export default function HomePage() {
 
     // 1) TEAMS
     const { data: t, error: tErr } = await supabase.from("teams").select("id,name").order("name");
-
     if (tErr) {
       setErr(`Teams error: ${tErr.message}`);
       setLoading(false);
@@ -120,9 +116,7 @@ export default function HomePage() {
     (tp || []).forEach((row: any) => {
       const pl = row?.players;
       if (!pl) return;
-
       const s = statsFrom(pl);
-
       flatAssigned.push({
         id: pl.id,
         name: safeName(pl),
@@ -240,9 +234,7 @@ export default function HomePage() {
     return arr.slice(0, 10);
   }, [players]);
 
-  if (loading) {
-    return <div className="min-h-screen text-white p-8">Loading…</div>;
-  }
+  if (loading) return <div className="min-h-screen text-white p-8">Loading…</div>;
 
   return (
     <div className="min-h-screen text-white p-6">
@@ -315,17 +307,23 @@ export default function HomePage() {
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h1 className="text-2xl font-bold">Teams</h1>
 
+            {/* ✅ Buttons on the right */}
             <div className="flex items-center gap-2">
-              <button onClick={load} className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold">
+              <button
+                onClick={load}
+                className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold"
+              >
                 Refresh
               </button>
 
+              {/* ✅ SAME RED BUTTON AS ADMIN */}
               <button
-                onClick={doLogout}
-                className="bg-white/10 hover:bg-white/15 transition px-4 py-2 rounded-xl font-bold border border-white/10"
-                title="Logout"
+                onClick={logout}
+                disabled={loggingOut}
+                className="bg-red-600 hover:bg-red-500 transition px-4 py-2 rounded-xl font-bold disabled:opacity-60"
+                title="Log out"
               >
-                Logout
+                {loggingOut ? "Logging out..." : "Log out"}
               </button>
             </div>
           </div>
@@ -368,7 +366,6 @@ export default function HomePage() {
                       </div>
                       <div className="text-white/50 text-xs">Ordered: GK → DEF → MID → FWD</div>
                     </div>
-
                     <div className="text-sm text-white/70">⚽ {p.goals} • 🅰 {p.assists} • 🎮 {p.matches_played}</div>
                   </div>
                 ))}
@@ -403,4 +400,3 @@ export default function HomePage() {
     </div>
   );
 }
-
