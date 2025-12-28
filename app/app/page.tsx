@@ -75,6 +75,15 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
+  async function doLogout() {
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      // even if signout fails, still go to register
+    }
+    router.replace("/register");
+  }
+
   async function load() {
     setLoading(true);
     setErr("");
@@ -327,7 +336,7 @@ export default function HomePage() {
               </button>
 
               <button
-                onClick={() => router.push("/app/logout")}
+                onClick={doLogout}
                 className="bg-white/10 hover:bg-white/15 transition px-4 py-2 rounded-xl font-bold border border-white/10"
                 title="Logout"
               >
