@@ -10,12 +10,12 @@ export default function LogoutPage() {
   useEffect(() => {
     (async () => {
       await supabase.auth.signOut();
-      router.replace("/login");
+      router.replace("/register");
     })();
   }, [router]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center text-white">
+    <div className="min-h-screen bg-transparent flex items-center justify-center text-white">
       Logging out...
     </div>
   );
