@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type Team = {
@@ -66,6 +67,8 @@ function statsFrom(pl: any): PlayerStats | null {
 }
 
 export default function HomePage() {
+  const router = useRouter();
+
   const [teams, setTeams] = useState<Team[]>([]);
   const [players, setPlayers] = useState<PlayerRow[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
@@ -90,7 +93,6 @@ export default function HomePage() {
     setTeams((t as Team[]) || []);
 
     // 2) TEAM PLAYERS + PLAYER + STATS
-    // (This shows only players that are assigned to teams)
     const { data: tp, error: tpErr } = await supabase
       .from("team_players")
       .select(
@@ -134,8 +136,7 @@ export default function HomePage() {
       });
     });
 
-    // 3) ALSO FETCH ALL ROSTER PLAYERS (so newly created players show somewhere)
-    // If you want ONLY team-assigned players, you can delete this block.
+    // 3) ALSO FETCH ALL ROSTER PLAYERS
     const { data: allP, error: allPErr } = await supabase
       .from("players")
       .select(
@@ -154,7 +155,6 @@ export default function HomePage() {
       .order("created_at", { ascending: true });
 
     if (allPErr) {
-      // Not fatal; we still show assigned ones
       setPlayers(flatAssigned);
       setLoading(false);
       return;
@@ -223,7 +223,7 @@ export default function HomePage() {
   }, [players]);
 
   const topScorers = useMemo(() => {
-    const arr = [...players].filter((p) => p.team_id); // leaderboard for team players only
+    const arr = [...players].filter((p) => p.team_id);
     arr.sort((a, b) => {
       if (b.goals !== a.goals) return b.goals - a.goals;
       if (b.assists !== a.assists) return b.assists - a.assists;
@@ -316,12 +316,24 @@ export default function HomePage() {
         <div className="bg-[#111c44]/75 backdrop-blur border border-white/10 rounded-2xl p-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h1 className="text-2xl font-bold">Teams</h1>
-            <button
-              onClick={load}
-              className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold"
-            >
-              Refresh
-            </button>
+
+            {/* ✅ Buttons on the right */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={load}
+                className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold"
+              >
+                Refresh
+              </button>
+
+              <button
+                onClick={() => router.push("/app/logout")}
+                className="bg-white/10 hover:bg-white/15 transition px-4 py-2 rounded-xl font-bold border border-white/10"
+                title="Logout"
+              >
+                Logout
+              </button>
+            </div>
           </div>
 
           <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4 mt-4">
@@ -378,7 +390,7 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Unassigned roster players (created but not assigned to teams yet) */}
+        {/* Unassigned roster players */}
         {unassignedPlayers.length > 0 && (
           <div className="bg-[#111c44]/55 backdrop-blur border border-white/10 rounded-2xl p-5">
             <h2 className="text-xl font-bold mb-2">Unassigned Players</h2>

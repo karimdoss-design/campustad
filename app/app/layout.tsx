@@ -94,7 +94,7 @@ type LogoMark = {
   center?: boolean;
 };
 
-/* ---------- Pitch SVG (pure CSS/SVG) ---------- */
+/* ---------- Pitch SVG ---------- */
 const pitchLinesSvg = encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
   <g fill="none" stroke="#bfe9ff" stroke-width="2" opacity="0.28">
@@ -123,15 +123,25 @@ function StadiumBackground() {
 
   return (
     <div className="pointer-events-none fixed inset-0 z-0">
-      {/* baby-blue stadium lighting */}
+      {/* ✅ NEW: DawraLik photo background behind everything */}
       <div
         className="absolute inset-0"
         style={{
-          background: `
-            radial-gradient(70% 45% at 50% -10%, rgba(120,200,255,0.35), transparent 60%),
-            radial-gradient(80% 55% at 50% 115%, rgba(90,180,255,0.28), transparent 65%),
-            linear-gradient(180deg, #07102a 0%, #0b1530 45%, #07102a 100%)
-          `,
+          backgroundImage: `url("/logowithbackground.png")`, // <-- MUST match exactly the file in /public
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat",
+          backgroundSize: "cover",
+          opacity: 0.22, // adjust 0.15–0.30
+          filter: "saturate(1.05) contrast(1.05)",
+        }}
+      />
+
+      {/* ✅ Dark overlay to keep text readable */}
+      <div
+        className="absolute inset-0"
+        style={{
+          background:
+            "linear-gradient(180deg, rgba(7,16,42,0.92) 0%, rgba(11,21,48,0.75) 45%, rgba(7,16,42,0.94) 100%)",
         }}
       />
 
@@ -224,24 +234,51 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<string | null>(null);
   const [hasUnreadNews, setHasUnreadNews] = useState(false);
 
+  // ✅ better: keep role/status updated even in PWA (Add to Home Screen)
   useEffect(() => {
-    (async () => {
+    let unsub: any = null;
+
+    async function refreshMe() {
       const { data } = await supabase.auth.getUser();
       const user = data.user;
+
       if (!user) {
         setRole(null);
         setStatus(null);
         return;
       }
 
-      const { data: prof } = await supabase.from("profiles").select("role,status").eq("id", user.id).single();
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("role,status")
+        .eq("id", user.id)
+        .maybeSingle();
 
       setRole((prof?.role as Role) ?? null);
       setStatus(prof?.status ?? null);
 
-      if (prof?.role === "player" && prof?.status === "pending") router.replace("/waiting");
-    })();
-  }, [router]);
+      // ✅ If admin accidentally lands in /app, send to /admin
+      if (prof?.role === "admin" && prof?.status === "active") {
+        if (pathname.startsWith("/app")) router.replace("/admin");
+        return;
+      }
+
+      if (prof?.role === "player" && prof?.status === "pending") {
+        router.replace("/waiting");
+      }
+    }
+
+    refreshMe();
+
+    const { data: sub } = supabase.auth.onAuthStateChange(() => {
+      refreshMe();
+    });
+    unsub = sub?.subscription;
+
+    return () => {
+      unsub?.unsubscribe?.();
+    };
+  }, [router, pathname]);
 
   // unread dot checker
   useEffect(() => {
@@ -262,7 +299,11 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
       if (!lastPost?.created_at) return setHasUnreadNews(false);
 
-      const { data: readRow } = await supabase.from("news_reads").select("last_seen_at").eq("user_id", user.id).maybeSingle();
+      const { data: readRow } = await supabase
+        .from("news_reads")
+        .select("last_seen_at")
+        .eq("user_id", user.id)
+        .maybeSingle();
 
       const lastSeen = readRow?.last_seen_at ? new Date(readRow.last_seen_at).getTime() : 0;
       const lastCreated = new Date(lastPost.created_at).getTime();
@@ -276,6 +317,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         .channel("nav-news")
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "news_posts" }, () => checkUnread())
         .subscribe();
+
       timer = setInterval(checkUnread, 8000);
     })();
 
@@ -285,13 +327,18 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const hideNav = pathname.startsWith("/admin") || pathname.startsWith("/register") || pathname.startsWith("/waiting");
+  const hideNav =
+    pathname.startsWith("/admin") ||
+    pathname.startsWith("/register") ||
+    pathname.startsWith("/waiting");
 
   return (
     <div className="min-h-screen text-white pb-24 relative bg-[#07102a] overflow-hidden">
       <StadiumBackground />
       <div className="relative z-10">{children}</div>
-      {!hideNav && <BottomNav role={role} status={status} pathname={pathname} hasUnreadNews={hasUnreadNews} />}
+      {!hideNav && (
+        <BottomNav role={role} status={status} pathname={pathname} hasUnreadNews={hasUnreadNews} />
+      )}
     </div>
   );
 }
