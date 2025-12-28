@@ -84,59 +84,23 @@ type NavItem = {
   showUnread?: boolean;
 };
 
-type LogoMark = {
-  src: string;
-  x: string;
-  y: string;
-  size: number;
-  rot: number;
-  opacity: number;
-  center?: boolean;
-};
-
-/* ---------- Pitch SVG ---------- */
-const pitchLinesSvg = encodeURIComponent(`
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
-  <g fill="none" stroke="#bfe9ff" stroke-width="2" opacity="0.28">
-    <rect x="90" y="90" width="1020" height="620" rx="28"/>
-    <line x1="600" y1="90" x2="600" y2="710"/>
-    <circle cx="600" cy="400" r="92"/>
-    <circle cx="600" cy="400" r="6" fill="#bfe9ff" opacity="0.35"/>
-    <rect x="90" y="240" width="150" height="320" rx="18"/>
-    <rect x="960" y="240" width="150" height="320" rx="18"/>
-    <rect x="90" y="315" width="60" height="170" rx="14" opacity="0.18"/>
-    <rect x="1050" y="315" width="60" height="170" rx="14" opacity="0.18"/>
-    <path d="M90 400h40" opacity="0.25"/>
-    <path d="M1110 400h-40" opacity="0.25"/>
-  </g>
-</svg>
-`);
-
-function StadiumBackground() {
-  const logos: LogoMark[] = [
-    { src: "/unis/guc.png", x: "10%", y: "16%", size: 220, rot: -12, opacity: 0.08 },
-    { src: "/unis/bue.png", x: "78%", y: "18%", size: 220, rot: 10, opacity: 0.08 },
-    { src: "/unis/auc.png", x: "14%", y: "74%", size: 240, rot: 8, opacity: 0.085 },
-    { src: "/unis/coventry.png", x: "80%", y: "74%", size: 220, rot: -10, opacity: 0.08 },
-    { src: "/unis/giu.png", x: "50%", y: "52%", size: 340, rot: 0, opacity: 0.06, center: true },
-  ];
-
+/* ---------- NEW: PHOTO BACKGROUND ONLY ---------- */
+function DawraLikPhotoBackground() {
   return (
     <div className="pointer-events-none fixed inset-0 z-0">
-      {/* ✅ NEW: DawraLik photo background behind everything */}
+      {/* ✅ use cache-bust to force phones to fetch new file */}
       <div
         className="absolute inset-0"
         style={{
-          backgroundImage: `url("/logowithbackground.png")`, // <-- MUST match exactly the file in /public
+          backgroundImage: `url("/logowithbackground.png?v=2")`,
           backgroundPosition: "center",
           backgroundRepeat: "no-repeat",
           backgroundSize: "cover",
-          opacity: 0.22, // adjust 0.15–0.30
-          filter: "saturate(1.05) contrast(1.05)",
+          opacity: 1,
         }}
       />
 
-      {/* ✅ Dark overlay to keep text readable */}
+      {/* ✅ dark overlay for readability */}
       <div
         className="absolute inset-0"
         style={{
@@ -145,84 +109,23 @@ function StadiumBackground() {
         }}
       />
 
-      {/* floodlights */}
+      {/* subtle glow */}
       <div
         className="absolute -top-28 -left-32 w-[560px] h-[560px]"
         style={{
-          background: "radial-gradient(circle at 55% 55%, rgba(120,200,255,0.36), transparent 62%)",
+          background: "radial-gradient(circle at 55% 55%, rgba(120,200,255,0.28), transparent 62%)",
           filter: "blur(10px)",
-          opacity: 0.95,
+          opacity: 0.9,
         }}
       />
       <div
         className="absolute -top-28 -right-32 w-[560px] h-[560px]"
         style={{
-          background: "radial-gradient(circle at 45% 55%, rgba(120,200,255,0.34), transparent 62%)",
+          background: "radial-gradient(circle at 45% 55%, rgba(120,200,255,0.26), transparent 62%)",
           filter: "blur(10px)",
-          opacity: 0.95,
+          opacity: 0.9,
         }}
       />
-
-      {/* bottom haze */}
-      <div
-        className="absolute bottom-0 left-0 right-0 h-[48%]"
-        style={{
-          background: `
-            radial-gradient(70% 60% at 50% 100%, rgba(120,200,255,0.22), transparent 70%),
-            linear-gradient(180deg, transparent 0%, rgba(120,200,255,0.06) 100%)
-          `,
-          opacity: 0.95,
-        }}
-      />
-
-      {/* pitch lines */}
-      <div
-        className="absolute inset-0"
-        style={{
-          backgroundImage: `url("data:image/svg+xml,${pitchLinesSvg}")`,
-          backgroundRepeat: "no-repeat",
-          backgroundPosition: "center",
-          backgroundSize: "min(1200px, 92vw) auto",
-          opacity: 0.22,
-          mixBlendMode: "screen",
-          filter: "drop-shadow(0 0 18px rgba(120,200,255,0.22))",
-        }}
-      />
-
-      {/* diagonal speed lines */}
-      <div
-        className="absolute inset-0"
-        style={{
-          backgroundImage:
-            "repeating-linear-gradient(120deg, rgba(120,200,255,0.05) 0px, rgba(120,200,255,0.05) 1px, transparent 1px, transparent 18px)",
-          opacity: 0.14,
-          mixBlendMode: "screen",
-        }}
-      />
-
-      {/* university logos watermark */}
-      {logos.map((l, idx) => {
-        const tx = l.center ? "-50%" : "0";
-        const ty = l.center ? "-50%" : "0";
-        return (
-          <div
-            key={idx}
-            className="absolute"
-            style={{
-              left: l.x,
-              top: l.y,
-              transform: `translate(${tx}, ${ty}) rotate(${l.rot}deg)`,
-              width: l.size,
-              height: l.size,
-              opacity: l.opacity,
-              mixBlendMode: "screen",
-              filter: "blur(0.2px) drop-shadow(0 0 22px rgba(120,200,255,0.22))",
-            }}
-          >
-            <img src={l.src} alt="" className="w-full h-full object-contain" draggable={false} />
-          </div>
-        );
-      })}
     </div>
   );
 }
@@ -234,9 +137,9 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<string | null>(null);
   const [hasUnreadNews, setHasUnreadNews] = useState(false);
 
-  // ✅ better: keep role/status updated even in PWA (Add to Home Screen)
+  // ✅ keep role/status correct in PWA
   useEffect(() => {
-    let unsub: any = null;
+    let sub: any = null;
 
     async function refreshMe() {
       const { data } = await supabase.auth.getUser();
@@ -257,7 +160,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       setRole((prof?.role as Role) ?? null);
       setStatus(prof?.status ?? null);
 
-      // ✅ If admin accidentally lands in /app, send to /admin
       if (prof?.role === "admin" && prof?.status === "active") {
         if (pathname.startsWith("/app")) router.replace("/admin");
         return;
@@ -270,14 +172,10 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
     refreshMe();
 
-    const { data: sub } = supabase.auth.onAuthStateChange(() => {
-      refreshMe();
-    });
-    unsub = sub?.subscription;
+    const { data } = supabase.auth.onAuthStateChange(() => refreshMe());
+    sub = data?.subscription;
 
-    return () => {
-      unsub?.unsubscribe?.();
-    };
+    return () => sub?.unsubscribe?.();
   }, [router, pathname]);
 
   // unread dot checker
@@ -317,7 +215,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         .channel("nav-news")
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "news_posts" }, () => checkUnread())
         .subscribe();
-
       timer = setInterval(checkUnread, 8000);
     })();
 
@@ -327,18 +224,13 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const hideNav =
-    pathname.startsWith("/admin") ||
-    pathname.startsWith("/register") ||
-    pathname.startsWith("/waiting");
+  const hideNav = pathname.startsWith("/admin") || pathname.startsWith("/register") || pathname.startsWith("/waiting");
 
   return (
-    <div className="min-h-screen text-white pb-24 relative bg-[#07102a] overflow-hidden">
-      <StadiumBackground />
+    <div className="min-h-screen text-white pb-24 relative overflow-hidden">
+      <DawraLikPhotoBackground />
       <div className="relative z-10">{children}</div>
-      {!hideNav && (
-        <BottomNav role={role} status={status} pathname={pathname} hasUnreadNews={hasUnreadNews} />
-      )}
+      {!hideNav && <BottomNav role={role} status={status} pathname={pathname} hasUnreadNews={hasUnreadNews} />}
     </div>
   );
 }
