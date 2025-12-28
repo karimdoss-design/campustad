@@ -88,7 +88,7 @@ export default function NewsPage() {
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5">
           <h1 className="text-2xl font-bold">News</h1>
-          <p className="text-white/60 text-sm">Updates from Campustad admin.</p>
+          <p className="text-white/60 text-sm">Updates from DawraLik admins.</p>
         </div>
 
         {err && <div className="text-red-400">{err}</div>}
