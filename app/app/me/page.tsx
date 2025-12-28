@@ -4,17 +4,11 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-type Profile = {
-  id: string;
-  name: string;
-  role: "admin" | "player" | "fan";
-  status: "pending" | "active" | "rejected";
-  university: string | null;
-};
-
+type Team = { id: string; name: string };
 type RosterPlayer = {
   id: string;
   full_name: string;
+  display_name: string | null;
   university: string | null;
   position: string | null;
   linked_profile_id: string | null;
@@ -22,130 +16,103 @@ type RosterPlayer = {
 
 type PlayerStats = {
   player_id: string;
-  matches_played: number;
-  goals: number;
-  assists: number;
-  motm: number;
+  matches_played: number | null;
+  goals: number | null;
+  assists: number | null;
+  motm: number | null;
 };
 
-type Team = {
-  id: string;
-  name: string;
-};
-
-export default function MyStatsPage() {
+export default function MePage() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [err, setErr] = useState("");
 
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [roster, setRoster] = useState<RosterPlayer | null>(null);
-  const [stats, setStats] = useState<PlayerStats | null>(null);
+  const [meRoster, setMeRoster] = useState<RosterPlayer | null>(null);
   const [team, setTeam] = useState<Team | null>(null);
+  const [stats, setStats] = useState<PlayerStats | null>(null);
 
   async function load() {
-    setError("");
+    setLoading(true);
+    setErr("");
 
-    // Must be logged in
-    const { data: auth } = await supabase.auth.getUser();
-    const user = auth.user;
-
-    if (!user) {
+    // 1) must be logged in
+    const { data: userData } = await supabase.auth.getUser();
+    if (!userData.user) {
       router.replace("/register");
       return;
     }
+    const uid = userData.user.id;
 
-    // Load profile
-    const { data: prof, error: profErr } = await supabase
-      .from("profiles")
-      .select("id,name,role,status,university")
-      .eq("id", user.id)
-      .single();
-
-    if (profErr) {
-      setError(profErr.message);
-      setLoading(false);
-      return;
-    }
-
-    const p = prof as Profile;
-    setProfile(p);
-
-    // ✅ PLAYERS ONLY: fans/admin cannot see this page
-    if (p.role !== "player") {
-      router.replace("/app");
-      return;
-    }
-
-    // Pending players go to waiting
-    if (p.status === "pending") {
-      router.replace("/waiting");
-      return;
-    }
-
-    // Rejected players also go to register/app (your choice)
-    if (p.status === "rejected") {
-      router.replace("/register");
-      return;
-    }
-
-    // Find roster player linked to this login
+    // 2) find roster player that is linked to this user
     const { data: rp, error: rpErr } = await supabase
       .from("players")
-      .select("id,full_name,university,position,linked_profile_id")
-      .eq("linked_profile_id", user.id)
+      .select("id,full_name,display_name,university,position,linked_profile_id")
+      .eq("linked_profile_id", uid)
       .maybeSingle();
 
     if (rpErr) {
-      setError(rpErr.message);
+      setErr(`Roster lookup error: ${rpErr.message}`);
       setLoading(false);
       return;
     }
 
-    // Not linked yet
     if (!rp) {
-      setRoster(null);
+      setMeRoster(null);
+      setTeam(null);
       setStats(null);
+      setLoading(false);
+      return;
+    }
+
+    setMeRoster(rp as RosterPlayer);
+
+    // 3) stats row
+    const { data: st, error: stErr } = await supabase
+      .from("player_stats")
+      .select("player_id,matches_played,goals,assists,motm")
+      .eq("player_id", rp.id)
+      .maybeSingle();
+
+    if (stErr) {
+      setErr(`Stats error: ${stErr.message}`);
+    } else {
+      setStats((st as PlayerStats) || null);
+    }
+
+    // 4) team assignment (team_players uses roster player id)
+    const { data: tp, error: tpErr } = await supabase
+      .from("team_players")
+      .select("team_id")
+      .eq("player_id", rp.id)
+      .maybeSingle();
+
+    if (tpErr) {
+      setErr((prev) => prev ? prev + `\nTeam assignment error: ${tpErr.message}` : `Team assignment error: ${tpErr.message}`);
       setTeam(null);
       setLoading(false);
       return;
     }
 
-    const rosterPlayer = rp as RosterPlayer;
-    setRoster(rosterPlayer);
-
-    // Load stats
-    const { data: st, error: stErr } = await supabase
-      .from("player_stats")
-      .select("player_id,matches_played,goals,assists,motm")
-      .eq("player_id", rosterPlayer.id)
-      .maybeSingle();
-
-    if (stErr) {
-      setError(stErr.message);
+    if (!tp?.team_id) {
+      setTeam(null);
       setLoading(false);
       return;
     }
 
-    setStats((st as PlayerStats) || null);
-
-    // Load team (team_players join teams)
-    const { data: tp, error: tpErr } = await supabase
-      .from("team_players")
-      .select("team_id, teams(id,name)")
-      .eq("player_id", rosterPlayer.id)
+    // 5) fetch team name
+    const { data: t, error: tErr } = await supabase
+      .from("teams")
+      .select("id,name")
+      .eq("id", tp.team_id)
       .maybeSingle();
 
-    if (tpErr) {
-      setError(tpErr.message);
-      setLoading(false);
-      return;
+    if (tErr) {
+      setErr((prev) => prev ? prev + `\nTeam error: ${tErr.message}` : `Team error: ${tErr.message}`);
+      setTeam(null);
+    } else {
+      setTeam((t as Team) || null);
     }
-
-const teamsArr = (tp?.teams as Team[] | null) ?? null;
-if (teamsArr && teamsArr.length > 0) setTeam(teamsArr[0]);
-else setTeam(null);
 
     setLoading(false);
   }
@@ -155,74 +122,66 @@ else setTeam(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#0b1530] text-white p-8">
-        Loading...
-      </div>
-    );
-  }
+  if (loading) return <div className="min-h-screen bg-[#0b1530] text-white p-8">Loading…</div>;
 
   return (
     <div className="min-h-screen bg-[#0b1530] text-white p-6">
-      <div className="max-w-3xl mx-auto space-y-6">
-        <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold">My Stats</h1>
-            <p className="text-white/70">Your Campustad player profile.</p>
-          </div>
-          <button
-            onClick={load}
-            className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold"
-          >
-            Refresh
-          </button>
+      <div className="max-w-3xl mx-auto space-y-4">
+        <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5">
+          <h1 className="text-2xl font-bold">My Profile</h1>
+          <p className="text-white/70">Your roster + team + stats.</p>
         </div>
 
-        {error && <div className="text-red-400">{error}</div>}
+        {err && (
+          <div className="bg-red-600/20 border border-red-500/40 text-red-200 rounded-2xl p-4 whitespace-pre-wrap">
+            {err}
+          </div>
+        )}
 
-        {!roster ? (
+        {!meRoster ? (
           <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5">
-            <div className="text-lg font-bold">Not linked yet</div>
-            <div className="text-white/70">
-              Your account is approved, but the admin hasn’t linked your login to
-              your roster player yet.
-            </div>
-            <div className="text-white/60 text-sm mt-2">
-              Ask admin to link you at: <b>/admin/link-player</b>
+            <div className="font-bold text-lg">Not linked yet</div>
+            <div className="text-white/70 text-sm">
+              Your account is not linked to a roster player.
+              Admin must link you in <b>/admin/link-player</b>.
             </div>
           </div>
         ) : (
-          <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5 space-y-4">
-            <div>
-              <div className="text-2xl font-bold">{roster.full_name}</div>
-              <div className="text-white/70">
-                {(roster.university || profile?.university || "—")} •{" "}
-                {(roster.position || "—")}
+          <>
+            <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5 space-y-2">
+              <div className="text-xl font-bold">
+                {meRoster.display_name || meRoster.full_name}
               </div>
-              <div className="text-white/60 text-sm mt-1">
-                Team: <b>{team?.name || "Not assigned yet"}</b>
+              <div className="text-white/70 text-sm">
+                {meRoster.university || "—"} • {meRoster.position || "—"}
+              </div>
+              <div className="text-white/70 text-sm">
+                Team:{" "}
+                <b className="text-white">{team?.name || "Unassigned"}</b>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <StatCard label="Matches" value={stats?.matches_played ?? 0} />
-              <StatCard label="Goals" value={stats?.goals ?? 0} />
-              <StatCard label="Assists" value={stats?.assists ?? 0} />
-              <StatCard label="MOTM" value={stats?.motm ?? 0} />
+            <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5">
+              <div className="text-xl font-bold mb-3">My Stats</div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <StatBox label="Matches" value={stats?.matches_played ?? 0} />
+                <StatBox label="Goals" value={stats?.goals ?? 0} />
+                <StatBox label="Assists" value={stats?.assists ?? 0} />
+                <StatBox label="MOTM" value={stats?.motm ?? 0} />
+              </div>
             </div>
-          </div>
+          </>
         )}
       </div>
     </div>
   );
 }
 
-function StatCard({ label, value }: { label: string; value: number }) {
+function StatBox({ label, value }: { label: string; value: number }) {
   return (
     <div className="bg-[#0b1530] border border-[#1f2a60] rounded-2xl p-4">
-      <div className="text-white/70 text-sm">{label}</div>
-      <div className="text-3xl font-bold">{value}</div>
+      <div className="text-white/60 text-xs">{label}</div>
+      <div className="text-2xl font-bold">{value}</div>
     </div>
   );
 }

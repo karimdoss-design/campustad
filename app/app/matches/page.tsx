@@ -23,7 +23,7 @@ type MatchRow = {
   motm_player_id: string | null;
 };
 
-type Player = { id: string; display_name: string };
+type Player = { id: string; display_name: string | null; full_name: string | null };
 
 type GoalRow = {
   id: string;
@@ -42,6 +42,14 @@ function fmtKickoff(iso: string | null) {
   } catch {
     return iso;
   }
+}
+
+function safePlayerName(p: Player | null | undefined) {
+  const n =
+    (p?.display_name && p.display_name.trim()) ||
+    (p?.full_name && p.full_name.trim()) ||
+    "";
+  return n || "Unknown";
 }
 
 export default function MatchesPage() {
@@ -81,10 +89,11 @@ export default function MatchesPage() {
     if (gErr) return fail(gErr.message);
     setGroups((g as Group[]) || []);
 
+    // ✅ FIX: fetch full_name too + don’t rely on display_name existing
     const { data: p, error: pErr } = await supabase
       .from("players")
-      .select("id,display_name")
-      .order("display_name");
+      .select("id,display_name,full_name")
+      .order("created_at", { ascending: true });
     if (pErr) return fail(pErr.message);
     setPlayers((p as Player[]) || []);
 
@@ -124,26 +133,10 @@ export default function MatchesPage() {
   useEffect(() => {
     const channel = supabase
       .channel("app_matches_live")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "matches" },
-        () => scheduleReload()
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "match_goals" },
-        () => scheduleReload()
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "teams" },
-        () => scheduleReload()
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "players" },
-        () => scheduleReload()
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "matches" }, () => scheduleReload())
+      .on("postgres_changes", { event: "*", schema: "public", table: "match_goals" }, () => scheduleReload())
+      .on("postgres_changes", { event: "*", schema: "public", table: "teams" }, () => scheduleReload())
+      .on("postgres_changes", { event: "*", schema: "public", table: "players" }, () => scheduleReload())
       .subscribe();
 
     // backup auto-refresh every 25s (useful if websocket drops)
@@ -169,9 +162,12 @@ export default function MatchesPage() {
     return m;
   }, [groups]);
 
+  // ✅ FIX: map id -> (display_name || full_name)
   const playerName = useMemo(() => {
     const m = new Map<string, string>();
-    players.forEach((p) => m.set(p.id, p.display_name));
+    players.forEach((p) => {
+      m.set(p.id, safePlayerName(p));
+    });
     return m;
   }, [players]);
 
@@ -206,14 +202,9 @@ export default function MatchesPage() {
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5 flex items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold">Matches</h1>
-            <p className="text-white/60 text-sm">
-              Live updates • Click a match to see scorers, assists, and MOTM.
-            </p>
+            <p className="text-white/60 text-sm">Live updates • Click a match to see scorers, assists, and MOTM.</p>
           </div>
-          <button
-            onClick={load}
-            className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold"
-          >
+          <button onClick={load} className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold">
             Refresh
           </button>
         </div>
@@ -306,10 +297,9 @@ function MatchCard({
       ? `Group • ${m.group_id ? groupName.get(m.group_id) || "—" : "—"}`
       : `Knockout${m.knockout_round ? ` • ${m.knockout_round}` : ""}`;
 
-  const score =
-    m.home_score == null || m.away_score == null ? "—" : `${m.home_score} - ${m.away_score}`;
+  const score = m.home_score == null || m.away_score == null ? "—" : `${m.home_score} - ${m.away_score}`;
 
-  const motm = m.motm_player_id ? playerName.get(m.motm_player_id) || "—" : null;
+  const motm = m.motm_player_id ? playerName.get(m.motm_player_id) || "Unknown" : null;
 
   return (
     <div className="bg-[#0b1530] border border-[#1f2a60] rounded-2xl p-4">
