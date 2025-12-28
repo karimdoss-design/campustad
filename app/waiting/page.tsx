@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import DawraLikBackground from "@/components/DawraLikBackground";
 
 export default function WaitingPage() {
   const router = useRouter();
@@ -36,13 +37,11 @@ export default function WaitingPage() {
         return;
       }
 
-      // If approved, go to app
       if (prof.status === "active") {
         router.replace("/app");
         return;
       }
 
-      // If rejected
       if (prof.status === "rejected") {
         setMsg("Your registration was rejected. Contact the admin.");
         return;
@@ -51,24 +50,21 @@ export default function WaitingPage() {
       setMsg("Still pending approval… Admin will approve you soon.");
     }
 
-    // Run once immediately
     check();
-
-    // Poll every 2 seconds
     timer = setInterval(check, 2000);
 
     return () => clearInterval(timer);
   }, [router]);
 
   return (
-    <div className="min-h-screen bg-[#0b1530] text-white p-8 flex items-center justify-center">
-      <div className="max-w-md w-full bg-[#111c44] border border-white/10 rounded-2xl p-6 text-center space-y-3">
-        <div className="text-2xl font-bold">Waiting for approval</div>
-        <div className="text-white/70">{msg}</div>
-        <div className="text-white/50 text-sm">
-          (This page auto-refreshes every 2 seconds)
+    <DawraLikBackground>
+      <div className="min-h-screen text-white p-8 flex items-center justify-center">
+        <div className="max-w-md w-full bg-[#111c44]/80 border border-white/10 rounded-2xl p-6 text-center space-y-3 backdrop-blur">
+          <div className="text-2xl font-bold">Waiting for approval</div>
+          <div className="text-white/70">{msg}</div>
+          <div className="text-white/50 text-sm">(This page auto-refreshes every 2 seconds)</div>
         </div>
       </div>
-    </div>
+    </DawraLikBackground>
   );
 }

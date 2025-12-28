@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import DawraLikBackground from "@/components/DawraLikBackground";
 
 type Mode = "signup" | "signin";
 
@@ -41,7 +42,6 @@ export default function RegisterPage() {
   }, [mode]);
 
   async function afterLoginRedirect(userId: string) {
-    // Always refetch from DB (source of truth)
     const { data: prof, error } = await supabase
       .from("profiles")
       .select("role,status")
@@ -53,7 +53,6 @@ export default function RegisterPage() {
     setDebugProfile(prof ?? null);
     setDebugProfileErr(error ?? null);
 
-    // If profile can't be read → show error (this is what’s happening to you)
     if (error) {
       setErr(
         `Profile read blocked. This is almost always RLS or wrong Supabase project on Vercel.\n\nError: ${error.message}`
@@ -66,19 +65,16 @@ export default function RegisterPage() {
       return;
     }
 
-    // Admin → admin area
     if (prof.role === "admin" && prof.status === "active") {
       router.replace("/admin");
       return;
     }
 
-    // Player pending → waiting page
     if (prof.role === "player" && prof.status === "pending") {
       router.replace("/waiting");
       return;
     }
 
-    // Everyone else → app
     router.replace("/app");
   }
 
@@ -127,7 +123,6 @@ export default function RegisterPage() {
       email: cleanEmail,
       password,
       options: {
-        // ✅ Don’t hardcode localhost in production. This is safe for now:
         emailRedirectTo: `${window.location.origin}/app`,
       },
     });
@@ -168,187 +163,190 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen bg-transparent text-white p-6">
-      <div className="max-w-md mx-auto space-y-4">
-        <div className="bg-[#111c44]/80 border border-white/10 rounded-2xl p-5 backdrop-blur">
-          <h1 className="text-2xl font-bold">Campustad</h1>
-          <p className="text-white/70">
-            {mode === "signup" ? "Create account" : "Sign in to your account"}
-          </p>
+    <DawraLikBackground>
+      <div className="min-h-screen bg-transparent text-white p-6">
+        <div className="max-w-md mx-auto space-y-4">
+          <div className="bg-[#111c44]/80 border border-white/10 rounded-2xl p-5 backdrop-blur">
+            <h1 className="text-2xl font-bold">DawraLik</h1>
+            <p className="text-white/70">
+              {mode === "signup" ? "Create account" : "Sign in to your account"}
+            </p>
 
-          <div className="mt-4 flex gap-2">
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => setMode("signup")}
+                className={`flex-1 rounded-xl px-3 py-2 font-bold border ${
+                  mode === "signup"
+                    ? "bg-blue-600 border-blue-400/30"
+                    : "bg-[#0b1530] border-[#1f2a60]"
+                }`}
+              >
+                Sign Up
+              </button>
+              <button
+                onClick={() => setMode("signin")}
+                className={`flex-1 rounded-xl px-3 py-2 font-bold border ${
+                  mode === "signin"
+                    ? "bg-blue-600 border-blue-400/30"
+                    : "bg-[#0b1530] border-[#1f2a60]"
+                }`}
+              >
+                Sign In
+              </button>
+            </div>
+
+            {/* ✅ DEBUG PANEL */}
             <button
-              onClick={() => setMode("signup")}
-              className={`flex-1 rounded-xl px-3 py-2 font-bold border ${
-                mode === "signup"
-                  ? "bg-blue-600 border-blue-400/30"
-                  : "bg-[#0b1530] border-[#1f2a60]"
-              }`}
+              type="button"
+              onClick={() => setDebugOpen((v) => !v)}
+              className="mt-4 text-xs text-white/70 hover:text-white underline"
             >
-              Sign Up
+              {debugOpen ? "Hide debug" : "Show debug"}
             </button>
-            <button
-              onClick={() => setMode("signin")}
-              className={`flex-1 rounded-xl px-3 py-2 font-bold border ${
-                mode === "signin"
-                  ? "bg-blue-600 border-blue-400/30"
-                  : "bg-[#0b1530] border-[#1f2a60]"
-              }`}
-            >
-              Sign In
-            </button>
+
+            {debugOpen ? (
+              <div className="mt-3 text-xs bg-[#0b1530]/70 border border-white/10 rounded-xl p-3 space-y-2">
+                <div className="text-white/60">
+                  NEXT_PUBLIC_SUPABASE_URL:{" "}
+                  <span className="text-white break-all">
+                    {process.env.NEXT_PUBLIC_SUPABASE_URL || "(missing)"}
+                  </span>
+                </div>
+                <div className="text-white/60">
+                  Logged user id:{" "}
+                  <span className="text-white break-all">{debugUserId || "—"}</span>
+                </div>
+                <div className="text-white/60">
+                  profiles row:{" "}
+                  <pre className="text-white whitespace-pre-wrap break-words">
+                    {debugProfile ? JSON.stringify(debugProfile, null, 2) : "—"}
+                  </pre>
+                </div>
+                <div className="text-white/60">
+                  profiles error:{" "}
+                  <pre className="text-red-200 whitespace-pre-wrap break-words">
+                    {debugProfileErr ? JSON.stringify(debugProfileErr, null, 2) : "—"}
+                  </pre>
+                </div>
+              </div>
+            ) : null}
           </div>
 
-          {/* ✅ DEBUG PANEL */}
-          <button
-            type="button"
-            onClick={() => setDebugOpen((v) => !v)}
-            className="mt-4 text-xs text-white/70 hover:text-white underline"
-          >
-            {debugOpen ? "Hide debug" : "Show debug"}
-          </button>
-
-          {debugOpen ? (
-            <div className="mt-3 text-xs bg-[#0b1530]/70 border border-white/10 rounded-xl p-3 space-y-2">
-              <div className="text-white/60">
-                NEXT_PUBLIC_SUPABASE_URL:{" "}
-                <span className="text-white break-all">
-                  {process.env.NEXT_PUBLIC_SUPABASE_URL || "(missing)"}
-                </span>
-              </div>
-              <div className="text-white/60">
-                Logged user id: <span className="text-white break-all">{debugUserId || "—"}</span>
-              </div>
-              <div className="text-white/60">
-                profiles row:{" "}
-                <pre className="text-white whitespace-pre-wrap break-words">
-                  {debugProfile ? JSON.stringify(debugProfile, null, 2) : "—"}
-                </pre>
-              </div>
-              <div className="text-white/60">
-                profiles error:{" "}
-                <pre className="text-red-200 whitespace-pre-wrap break-words">
-                  {debugProfileErr ? JSON.stringify(debugProfileErr, null, 2) : "—"}
-                </pre>
-              </div>
+          {err ? (
+            <div className="bg-red-600/20 border border-red-500/40 text-red-200 rounded-2xl p-4 whitespace-pre-wrap">
+              {err}
             </div>
           ) : null}
-        </div>
 
-        {err ? (
-          <div className="bg-red-600/20 border border-red-500/40 text-red-200 rounded-2xl p-4 whitespace-pre-wrap">
-            {err}
-          </div>
-        ) : null}
-
-        {msg ? (
-          <div className="bg-green-600/20 border border-green-500/40 text-green-200 rounded-2xl p-4">
-            {msg}
-          </div>
-        ) : null}
-
-        {mode === "signin" ? (
-          <form
-            onSubmit={onSignIn}
-            className="bg-[#111c44]/80 border border-white/10 rounded-2xl p-5 space-y-3 backdrop-blur"
-          >
-            <input
-              className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
-              placeholder="Email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              autoComplete="email"
-            />
-            <input
-              className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
-              placeholder="Password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-            />
-
-            <button
-              disabled={loading}
-              className="w-full rounded-xl bg-blue-600 hover:bg-blue-500 transition font-bold py-3 disabled:opacity-50"
-            >
-              {loading ? "Signing in..." : "Sign In"}
-            </button>
-          </form>
-        ) : (
-          <form
-            onSubmit={onSignUp}
-            className="bg-[#111c44]/80 border border-white/10 rounded-2xl p-5 space-y-3 backdrop-blur"
-          >
-            <input
-              className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
-              placeholder="Full name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-            <input
-              className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
-              placeholder="University (AUC / GUC / GIU / Coventry / BUE)"
-              value={university}
-              onChange={(e) => setUniversity(e.target.value)}
-            />
-            <input
-              className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
-              placeholder="Phone"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-            />
-
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setRole("fan")}
-                className={`rounded-xl px-3 py-2 font-bold border ${
-                  role === "fan"
-                    ? "bg-blue-600 border-blue-400/30"
-                    : "bg-[#0b1530] border-[#1f2a60]"
-                }`}
-              >
-                Fan
-              </button>
-              <button
-                type="button"
-                onClick={() => setRole("player")}
-                className={`rounded-xl px-3 py-2 font-bold border ${
-                  role === "player"
-                    ? "bg-blue-600 border-blue-400/30"
-                    : "bg-[#0b1530] border-[#1f2a60]"
-                }`}
-              >
-                Player
-              </button>
+          {msg ? (
+            <div className="bg-green-600/20 border border-green-500/40 text-green-200 rounded-2xl p-4">
+              {msg}
             </div>
+          ) : null}
 
-            <input
-              className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
-              placeholder="Email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              autoComplete="email"
-            />
-            <input
-              className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
-              placeholder="Password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="new-password"
-            />
-
-            <button
-              disabled={loading}
-              className="w-full rounded-xl bg-green-600 hover:bg-green-500 transition font-bold py-3 disabled:opacity-50"
+          {mode === "signin" ? (
+            <form
+              onSubmit={onSignIn}
+              className="bg-[#111c44]/80 border border-white/10 rounded-2xl p-5 space-y-3 backdrop-blur"
             >
-              {loading ? "Creating..." : "Sign Up"}
-            </button>
-          </form>
-        )}
+              <input
+                className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="email"
+              />
+              <input
+                className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
+                placeholder="Password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+
+              <button
+                disabled={loading}
+                className="w-full rounded-xl bg-blue-600 hover:bg-blue-500 transition font-bold py-3 disabled:opacity-50"
+              >
+                {loading ? "Signing in..." : "Sign In"}
+              </button>
+            </form>
+          ) : (
+            <form
+              onSubmit={onSignUp}
+              className="bg-[#111c44]/80 border border-white/10 rounded-2xl p-5 space-y-3 backdrop-blur"
+            >
+              <input
+                className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
+                placeholder="Full name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+              <input
+                className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
+                placeholder="University (AUC / GUC / GIU / Coventry / BUE)"
+                value={university}
+                onChange={(e) => setUniversity(e.target.value)}
+              />
+              <input
+                className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
+                placeholder="Phone"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+              />
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRole("fan")}
+                  className={`rounded-xl px-3 py-2 font-bold border ${
+                    role === "fan"
+                      ? "bg-blue-600 border-blue-400/30"
+                      : "bg-[#0b1530] border-[#1f2a60]"
+                  }`}
+                >
+                  Fan
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRole("player")}
+                  className={`rounded-xl px-3 py-2 font-bold border ${
+                    role === "player"
+                      ? "bg-blue-600 border-blue-400/30"
+                      : "bg-[#0b1530] border-[#1f2a60]"
+                  }`}
+                >
+                  Player
+                </button>
+              </div>
+
+              <input
+                className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="email"
+              />
+              <input
+                className="w-full rounded-xl bg-[#0b1530] border border-[#1f2a60] p-3 outline-none"
+                placeholder="Password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="new-password"
+              />
+
+              <button
+                disabled={loading}
+                className="w-full rounded-xl bg-green-600 hover:bg-green-500 transition font-bold py-3 disabled:opacity-50"
+              >
+                {loading ? "Creating..." : "Sign Up"}
+              </button>
+            </form>
+          )}
+        </div>
       </div>
-    </div>
+    </DawraLikBackground>
   );
 }
