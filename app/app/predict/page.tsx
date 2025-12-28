@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -61,6 +61,10 @@ export default function PredictPage() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
+  // ✅ Prevent overlapping loads + avoid refreshing while submitting
+  const isLoadingRef = useRef(false);
+  const isSubmittingRef = useRef(false);
+
   const teamNameById = useMemo(() => {
     const m = new Map<string, string>();
     teams.forEach((t) => m.set(t.id, t.name));
@@ -73,14 +77,26 @@ export default function PredictPage() {
     return m;
   }, [myPreds]);
 
-  async function load() {
-    setLoading(true);
-    setErr("");
-    setMsg("");
+  async function load(opts?: { silent?: boolean }) {
+    // silent = do not clear msg/err and do not show full loader again
+    const silent = opts?.silent ?? false;
+
+    if (isLoadingRef.current) return;
+    isLoadingRef.current = true;
+
+    if (!silent) {
+      setLoading(true);
+      setErr("");
+      setMsg("");
+    } else {
+      // keep UI stable, but clear only error if you want
+      setErr("");
+    }
 
     const { data: u } = await supabase.auth.getUser();
     const user = u.user;
     if (!user) {
+      isLoadingRef.current = false;
       router.replace("/register");
       return;
     }
@@ -121,10 +137,26 @@ export default function PredictPage() {
     setLeaderboard((lb as LeaderRow[]) || []);
 
     setLoading(false);
+    isLoadingRef.current = false;
   }
 
+  // initial load
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ✅ AUTO-REFRESH ONLY HERE: every 60 seconds (silent)
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      // don't refresh while user is submitting a prediction
+      if (isSubmittingRef.current) return;
+
+      // silent reload keeps UI stable
+      load({ silent: true });
+    }, 60_000);
+
+    return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -138,6 +170,8 @@ export default function PredictPage() {
       return;
     }
 
+    isSubmittingRef.current = true;
+
     const { error } = await supabase.from("predictions").insert({
       match_id: matchId,
       user_id: meId,
@@ -146,12 +180,14 @@ export default function PredictPage() {
     });
 
     if (error) {
+      isSubmittingRef.current = false;
       setErr(error.message);
       return;
     }
 
     setMsg("Prediction submitted ✅");
-    await load();
+    await load(); // full load after submit
+    isSubmittingRef.current = false;
   }
 
   const upcoming = matches.filter((m) => m.status === "scheduled");
@@ -167,15 +203,16 @@ export default function PredictPage() {
         <div className="bg-[#111c44] border border-white/10 rounded-2xl p-5 flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold">Prediction Game</h1>
-            <p className="text-white/70">
-              +3 exact score • +1 correct outcome • 0 otherwise
-            </p>
+            <p className="text-white/70">+3 exact score • +1 correct outcome • 0 otherwise</p>
             <p className="text-white/50 text-xs mt-1">
               Your role: <b>{meRole ?? "—"}</b> {meRole !== "fan" ? " (view only)" : ""}
             </p>
+            <p className="text-white/40 text-xs mt-1">
+              Auto-refresh: every 60 seconds
+            </p>
           </div>
           <button
-            onClick={load}
+            onClick={() => load()}
             className="bg-blue-600 hover:bg-blue-500 transition px-4 py-2 rounded-xl font-bold"
           >
             Refresh
@@ -320,9 +357,7 @@ function UpcomingCard({
       <div className="text-white/60 text-xs">{meta}</div>
 
       {existing ? (
-        <div className="text-green-300 font-bold">
-          Your prediction: {existing} ✅
-        </div>
+        <div className="text-green-300 font-bold">Your prediction: {existing} ✅</div>
       ) : (
         <div className="flex flex-wrap items-center gap-3">
           <input
@@ -352,9 +387,7 @@ function UpcomingCard({
             Submit
           </button>
 
-          {!canPredict ? (
-            <div className="text-white/50 text-xs">Fans only</div>
-          ) : null}
+          {!canPredict ? <div className="text-white/50 text-xs">Fans only</div> : null}
         </div>
       )}
     </div>
