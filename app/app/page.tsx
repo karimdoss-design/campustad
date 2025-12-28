@@ -44,7 +44,14 @@ function posLabel(posRaw: string | null) {
 }
 
 function safeName(x: any) {
-  const n = x?.display_name ?? x?.full_name ?? x?.name ?? x?.username ?? x?.email ?? null;
+  const n =
+    x?.display_name ??
+    x?.full_name ??
+    x?.name ??
+    x?.username ??
+    x?.email ??
+    null;
+
   return typeof n === "string" && n.trim() ? n.trim() : "Unknown";
 }
 
@@ -65,16 +72,38 @@ export default function HomePage() {
   const [err, setErr] = useState("");
   const [loggingOut, setLoggingOut] = useState(false);
 
-  async function logout() {
-    // ✅ EXACT SAME AS ADMIN: signOut then go to /register
-    try {
-      setLoggingOut(true);
-      await supabase.auth.signOut();
-    } catch (e) {
-      // ignore errors; still redirect
-    } finally {
-      router.replace("/register");
-    }
+  // ✅ INSTANT logout: redirect first, signOut best-effort after
+  function logoutInstant() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+
+    // 1) Send user to register IMMEDIATELY
+    router.replace("/register");
+
+    // 2) Hard fallback redirect (works if router gets stuck on PWA)
+    setTimeout(() => {
+      if (typeof window !== "undefined") window.location.href = "/register";
+    }, 150);
+
+    // 3) Best-effort sign out AFTER redirect (do NOT await)
+    (async () => {
+      try {
+        await supabase.auth.signOut();
+      } catch (e) {
+        // ignore
+      }
+
+      // extra safety: clear supabase auth token keys
+      try {
+        if (typeof window !== "undefined") {
+          Object.keys(localStorage)
+            .filter((k) => k.startsWith("sb-") && k.endsWith("-auth-token"))
+            .forEach((k) => localStorage.removeItem(k));
+        }
+      } catch (e) {
+        // ignore
+      }
+    })();
   }
 
   async function load() {
@@ -82,7 +111,11 @@ export default function HomePage() {
     setErr("");
 
     // 1) TEAMS
-    const { data: t, error: tErr } = await supabase.from("teams").select("id,name").order("name");
+    const { data: t, error: tErr } = await supabase
+      .from("teams")
+      .select("id,name")
+      .order("name");
+
     if (tErr) {
       setErr(`Teams error: ${tErr.message}`);
       setLoading(false);
@@ -91,7 +124,10 @@ export default function HomePage() {
     setTeams((t as Team[]) || []);
 
     // 2) TEAM PLAYERS + PLAYER + STATS
-    const { data: tp, error: tpErr } = await supabase.from("team_players").select(`
+    const { data: tp, error: tpErr } = await supabase
+      .from("team_players")
+      .select(
+        `
         team_id,
         players (
           id,
@@ -104,7 +140,8 @@ export default function HomePage() {
             matches_played
           )
         )
-      `);
+      `
+      );
 
     if (tpErr) {
       setErr(`Team players error: ${tpErr.message}`);
@@ -116,7 +153,9 @@ export default function HomePage() {
     (tp || []).forEach((row: any) => {
       const pl = row?.players;
       if (!pl) return;
+
       const s = statsFrom(pl);
+
       flatAssigned.push({
         id: pl.id,
         name: safeName(pl),
@@ -307,7 +346,6 @@ export default function HomePage() {
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h1 className="text-2xl font-bold">Teams</h1>
 
-            {/* ✅ Buttons on the right */}
             <div className="flex items-center gap-2">
               <button
                 onClick={load}
@@ -316,9 +354,8 @@ export default function HomePage() {
                 Refresh
               </button>
 
-              {/* ✅ SAME RED BUTTON AS ADMIN */}
               <button
-                onClick={logout}
+                onClick={logoutInstant}
                 disabled={loggingOut}
                 className="bg-red-600 hover:bg-red-500 transition px-4 py-2 rounded-xl font-bold disabled:opacity-60"
                 title="Log out"
@@ -340,7 +377,9 @@ export default function HomePage() {
                 }`}
               >
                 <div className="font-bold text-lg">{t.name}</div>
-                <div className="text-white/60 text-sm">Players: {(playersByTeam.get(t.id) || []).length}</div>
+                <div className="text-white/60 text-sm">
+                  Players: {(playersByTeam.get(t.id) || []).length}
+                </div>
               </button>
             ))}
           </div>
@@ -349,7 +388,9 @@ export default function HomePage() {
         {/* Selected team players */}
         {selectedTeam && (
           <div className="bg-[#111c44]/75 backdrop-blur border border-white/10 rounded-2xl p-5">
-            <h2 className="text-xl font-bold mb-3">{teamNameById.get(selectedTeam) || "Team"} • Squad</h2>
+            <h2 className="text-xl font-bold mb-3">
+              {teamNameById.get(selectedTeam) || "Team"} • Squad
+            </h2>
 
             {(playersByTeam.get(selectedTeam) || []).length === 0 ? (
               <div className="text-white/70">No players in this team.</div>
@@ -362,11 +403,19 @@ export default function HomePage() {
                   >
                     <div>
                       <div className="font-bold">
-                        {p.name} <span className="text-white/60 font-normal">• {posLabel(p.position)}</span>
+                        {p.name}{" "}
+                        <span className="text-white/60 font-normal">
+                          • {posLabel(p.position)}
+                        </span>
                       </div>
-                      <div className="text-white/50 text-xs">Ordered: GK → DEF → MID → FWD</div>
+                      <div className="text-white/50 text-xs">
+                        Ordered: GK → DEF → MID → FWD
+                      </div>
                     </div>
-                    <div className="text-sm text-white/70">⚽ {p.goals} • 🅰 {p.assists} • 🎮 {p.matches_played}</div>
+
+                    <div className="text-sm text-white/70">
+                      ⚽ {p.goals} • 🅰 {p.assists} • 🎮 {p.matches_played}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -378,7 +427,9 @@ export default function HomePage() {
         {unassignedPlayers.length > 0 && (
           <div className="bg-[#111c44]/55 backdrop-blur border border-white/10 rounded-2xl p-5">
             <h2 className="text-xl font-bold mb-2">Unassigned Players</h2>
-            <div className="text-white/60 text-sm mb-3">These were created by admin but not added to a team yet.</div>
+            <div className="text-white/60 text-sm mb-3">
+              These were created by admin but not added to a team yet.
+            </div>
 
             <div className="space-y-2">
               {unassignedPlayers.map((p) => (
@@ -390,7 +441,9 @@ export default function HomePage() {
                     <div className="font-bold">{p.name}</div>
                     <div className="text-white/60 text-xs">{posLabel(p.position)}</div>
                   </div>
-                  <div className="text-sm text-white/70">⚽ {p.goals} • 🅰 {p.assists} • 🎮 {p.matches_played}</div>
+                  <div className="text-sm text-white/70">
+                    ⚽ {p.goals} • 🅰 {p.assists} • 🎮 {p.matches_played}
+                  </div>
                 </div>
               ))}
             </div>
