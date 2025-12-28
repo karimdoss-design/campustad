@@ -84,23 +84,24 @@ type NavItem = {
   showUnread?: boolean;
 };
 
-/* ---------- NEW: PHOTO BACKGROUND ONLY ---------- */
+/* ---------- PHOTO BACKGROUND ONLY ---------- */
 function DawraLikPhotoBackground() {
   return (
     <div className="pointer-events-none fixed inset-0 z-0">
-      {/* ✅ use cache-bust to force phones to fetch new file */}
+      {/* ✅ IMPORTANT: must match EXACT file in /public */}
       <div
         className="absolute inset-0"
         style={{
-          backgroundImage: `url("/logowithbackground.png?v=2")`,
+          backgroundImage: `url("/dawralik-bg.png?v=3")`,
           backgroundPosition: "center",
           backgroundRepeat: "no-repeat",
           backgroundSize: "cover",
-          opacity: 1,
+          opacity: 0.35,
+          filter: "saturate(1.05) contrast(1.05)",
         }}
       />
 
-      {/* ✅ dark overlay for readability */}
+      {/* dark overlay for readability */}
       <div
         className="absolute inset-0"
         style={{
